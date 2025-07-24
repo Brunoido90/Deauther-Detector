@@ -1,30 +1,43 @@
 #!/usr/bin/env python3
-# main.py – kompletter professioneller Deauth-Detector + Honeybot + optionaler Tray
+# main.py – kompletter Deauth-Detector + Honeybot (kein Tray-Code)
+# passt das iface automatisch an das erste gefundene Monitor-Interface an
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import threading, queue, os, json, csv, datetime, time
+from tkinter import ttk, filedialog
+import threading, queue, os, json, csv, datetime
 from scapy.all import *
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
-from PIL import Image
-import logging, signal, sys
+import subprocess, re
 
-logging.basicConfig(level=logging.INFO)
+# -------------------------------------------------
+# Automatisches Interface-Detection
+# -------------------------------------------------
+def find_monitor_interface():
+    try:
+        out = subprocess.check_output(["iw", "dev"], stderr=subprocess.DEVNULL).decode()
+        for line in out.splitlines():
+            m = re.search(r"Interface\s+(\S+mon\S*)", line)
+            if m:
+                return m.group(1).strip()
+    except:
+        pass
+    return None
 
-IFACE = "wlan0mon"
+IFACE = find_monitor_interface()
+if not IFACE:
+    print("Kein Monitor-Interface gefunden! Bitte vorher 'sudo airmon-ng start wlan0' ausführen.")
+    exit(1)
+
 HONEY_MAC = "aa:bb:cc:dd:ee:ff"
 
 # -------------------------------------------------
-# Queue für Thread-Safety
+# Queue & Model
 # -------------------------------------------------
 gui_queue = queue.Queue()
 
-# -------------------------------------------------
-# Model
-# -------------------------------------------------
 class EventModel:
     def __init__(self):
         self.events = []
@@ -55,7 +68,6 @@ def sniff_worker():
         if p.haslayer(Dot11ProbeReq):
             sender = p.addr2
             if sender and sender != HONEY_MAC:
-                # nur einmal pro 50 Events eintragen
                 with model.lock:
                     recent = [e for e in model.events[-50:] if e["sender"] == sender and e["typ"] == "Probe-Req"]
                     if not recent:
@@ -69,12 +81,11 @@ def sniff_worker():
 class DeauthApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Professional Deauth Detector")
+        self.root.title("Deauth Detector – Interface: " + IFACE)
         self.root.geometry("1200x700")
         self.root.configure(bg="#1e1e1e")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # Styles
         style = ttk.Style()
         style.theme_use("clam")
         style.configure("Treeview", background="#2e2e2e", foreground="white",
@@ -83,11 +94,10 @@ class DeauthApp:
         style.configure("TButton", background="#0078d4", foreground="white", borderwidth=0)
         style.map("TButton", background=[("active", "#106ebe")])
 
-        # Paned Window
         paned = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
         paned.pack(fill=tk.BOTH, expand=True)
 
-        # Oben: Treeview
+        # Treeview
         frame_top = ttk.Frame(paned)
         paned.add(frame_top, weight=3)
         cols = ("Time", "Type", "Sender MAC", "Target MAC", "RSSI (dBm)")
@@ -101,7 +111,7 @@ class DeauthApp:
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Unten: Live-Chart
+        # Chart
         frame_chart = ttk.Frame(paned)
         paned.add(frame_chart, weight=2)
         self.fig, self.ax = plt.subplots(figsize=(5, 2), facecolor="#1e1e1e")
@@ -119,12 +129,8 @@ class DeauthApp:
         ttk.Button(toolbar, text="Export CSV", command=self.export_csv).pack(side=tk.LEFT, padx=5, pady=5)
         ttk.Button(toolbar, text="Clear", command=self.clear).pack(side=tk.LEFT, padx=5, pady=5)
 
-        # Tray (optional)
-        self.tray_icon = None
-        self.setup_tray()
         self.root.after(200, self.process_queue)
 
-    # -------------------------------------------------
     def process_queue(self):
         try:
             while True:
@@ -136,7 +142,6 @@ class DeauthApp:
         self.root.after(200, self.process_queue)
 
     def refresh(self):
-        # Tree
         for child in self.tree.get_children():
             self.tree.delete(child)
         cutoff = datetime.datetime.now() - datetime.timedelta(seconds=60)
@@ -152,7 +157,6 @@ class DeauthApp:
                     str(e["rssi"])
                 ), tags=(tag,))
 
-            # Chart
             self.ax.clear()
             self.ax.set_facecolor("#1e1e1e")
             top = sorted(model.deauth_counter.items(), key=lambda x: x[1], reverse=True)[:5]
@@ -190,41 +194,11 @@ class DeauthApp:
                     for e in model.events:
                         writer.writerow([e["ts"], e["typ"], e["sender"], e["target"], e["rssi"]])
 
-    # -------------------------------------------------
-    # Tray-Setup mit Fallback
-    # -------------------------------------------------
-    def setup_tray(self):
-        try:
-            image = Image.open("icons/icon.png")
-            import pystray
-            self.tray_icon = pystray.Icon(
-                "DeauthDetector",
-                image,
-                "Deauth Detector",
-                pystray.Menu(
-                    pystray.MenuItem("Show", lambda: (self.tray_icon.stop(),
-                                                      self.root.after(0, self.root.deiconify))),
-                    pystray.MenuItem("Quit", lambda: (self.tray_icon.stop(), self.root.quit()))
-                )
-            )
-        except Exception as e:
-            logging.info("Tray nicht verfügbar: %s", e)
-            self.tray_icon = None
-
     def on_close(self):
-        if self.tray_icon:
-            self.root.withdraw()
-            threading.Thread(target=self.tray_icon.run, daemon=True).start()
-        else:
-            self.root.quit()
-
-# -------------------------------------------------
-# SIGINT abfangen
-# -------------------------------------------------
-signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+        self.root.quit()
 
 # -------------------------------------------------
 if __name__ == "__main__":
     root = tk.Tk()
-    app = DeauthApp(root)
+    DeauthApp(root)
     root.mainloop()
