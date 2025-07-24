@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
 """
-DeAuth-Guard Complete
-- Stop-Knopf
-- WLAN nach Beenden wiederherstellen
-sudo python3 deauth_complete.py
+DeAuth-Guard GUI-First – Adapter-Wahl direkt im Fenster
+sudo python3 deauth_complete_gui_first.py
 """
 import os, sys, time, threading, subprocess, signal
 from datetime import datetime
 
+# ---------- Scapy ----------
 try:
     from scapy.all import sniff, Dot11Deauth, RadioTap
 except ImportError:
     sys.exit("[!] pip3 install scapy")
 
+# ---------- Tkinter ----------
 try:
     import tkinter as tk
     from tkinter import ttk
-    HAS_TK = True
+    import tkinter.messagebox as msg
+    GUI_READY = True
 except ImportError:
-    HAS_TK = False
+    sys.exit("[!] tkinter nicht verfügbar")
 
+# ---------- Config ----------
 CFG = {
-    "thr": 3,
-    "hist": 1,
+    "deauth_thr": 3,
+    "hist_sec": 1,
     "ssid": "🍯_Free_WiFi",
     "chan": 6,
     "log": "/tmp/deauth.log"
@@ -33,7 +35,7 @@ MON_IFACE = None
 SNIFF_TH  = None
 H_PROC    = []
 
-# ---------- UTIL ----------
+# ---------- Utility ----------
 def run(cmd, cap=False):
     return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip() if cap else subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -43,18 +45,6 @@ def ifs():
 def can_mon(iface):
     phy = run(f"iw dev {iface} info | grep wiphy | awk '{{print $2}}'", cap=True)
     return "monitor" in run(f"iw phy phy{phy} info", cap=True).lower()
-
-def choose():
-    env = os.getenv("IFACE")
-    if env and env in ifs() and can_mon(env):
-        return env
-    cand = [i for i in ifs() if can_mon(i)]
-    if not cand:
-        sys.exit("[!] Kein Monitor-Adapter.")
-    for idx, i in enumerate(cand, 1):
-        print(f"  {idx}) {i}")
-    sel = input("Wählen [1]: ").strip() or "1"
-    return cand[int(sel) - 1]
 
 def mon_up(iface):
     run("airmon-ng check kill")
@@ -69,12 +59,12 @@ def mon_down(mon):
 
 def log(mac, rssi, ch):
     ts = datetime.now().strftime("%H:%M:%S")
-    line = f"{ts} {mac} {rssi} dBm CH:{ch}\n"
-    print(line.strip())
+    line = f"{ts} {mac} {rssi} dBm CH:{ch}"
+    print(line)
     with open(CFG["log"], "a") as f:
-        f.write(line)
+        f.write(line + "\n")
 
-# ---------- SNIFF ----------
+# ---------- Sniffer ----------
 def detect(pkt):
     if not pkt.haslayer(Dot11Deauth):
         return
@@ -83,11 +73,12 @@ def detect(pkt):
     ch   = pkt[RadioTap].ChannelFrequency if pkt.haslayer(RadioTap) else "?"
     now  = time.time()
     HISTORY.setdefault(mac, []).append(now)
-    HISTORY[mac] = [t for t in HISTORY[mac] if now - t < CFG["hist"]]
-    if len(HISTORY[mac]) >= CFG["thr"]:
+    HISTORY[mac] = [t for t in HISTORY[mac] if now - t < CFG["hist_sec"]]
+    if len(HISTORY[mac]) >= CFG["deauth_thr"]:
         HISTORY[mac] = []
         log(mac, rssi, ch)
-        GUI.add(mac, rssi, ch)
+        if GUI:
+            GUI.add(mac, rssi, ch)
 
 def sniff_start(iface):
     global SNIFF_TH
@@ -97,9 +88,9 @@ def sniff_start(iface):
 def sniff_stop():
     global SNIFF_TH
     if SNIFF_TH and SNIFF_TH.is_alive():
-        os._exit(0)   # hart beenden – tkinter & sniff sauber trennen
+        os._exit(0)
 
-# ---------- HONEY ----------
+# ---------- Honey ----------
 def honey_start(iface):
     run(f"ip link set {iface} down && ip link set {iface} up")
     run(f"ip addr flush dev {iface} && ip addr add 192.168.66.1/24 dev {iface}")
@@ -115,10 +106,8 @@ wpa=0
 interface={iface}
 dhcp-range=192.168.66.10,192.168.66.50,255.255.255.0,12h
 """)
-    H_PROC.extend([
-        subprocess.Popen(["hostapd", "-B", "/tmp/hg_hostapd.conf"]),
-        subprocess.Popen(["dnsmasq", "-C", "/tmp/hg_dnsmasq.conf"])
-    ])
+    subprocess.run(["hostapd", "-B", "/tmp/hg_hostapd.conf"])
+    subprocess.run(["dnsmasq", "-C", "/tmp/hg_dnsmasq.conf"])
     print("[+] Honey-AP ON")
 
 def honey_stop():
@@ -136,34 +125,60 @@ class MainGUI:
         root.configure(bg="black")
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("Treeview", background="black", foreground="#00FF00", fieldbackground="black", font=("Consolas", 11))
-        style.map("Treeview", background=[("selected", "#003300")])
+        style.configure("Treeview", bg="black", fg="#00FF00", fieldbg="black", font=("Consolas", 11))
+        style.map("Treeview", bg=[("selected", "#003300")])
 
         frm = tk.Frame(root, bg="black")
         frm.pack(fill="both", expand=True, padx=10, pady=10)
 
+        # Adapter-Auswahl
+        self.adapters = [i for i in ifs() if can_mon(i)]
+        if not self.adapters:
+            msg.showerror("Kein Adapter", "Kein Monitor-fähiger WLAN-Adapter!")
+            sys.exit(1)
+
+        self.var = tk.StringVar(value=self.adapters[0])
+        tk.Label(frm, text="WLAN-Adapter wählen:", fg="#00FF00", bg="black", font=("Consolas", 12)).pack()
+        tk.OptionMenu(frm, self.var, *self.adapters).pack(pady=5)
+
+        tk.Button(frm, text="Start Monitor & Sniffer", command=self.start_monitor,
+                  bg="#005000", fg="white", font=("Consolas", 11)).pack(pady=5)
+
+        # TreeView
         self.tree = ttk.Treeview(frm, columns=("Time", "MAC", "RSSI", "CH"), show="headings", height=15)
         for col in ("Time", "MAC", "RSSI", "CH"):
             self.tree.heading(col, text=col.upper())
             self.tree.column(col, width=120, anchor="center")
-        self.tree.pack(fill="both", expand=True)
+        self.tree.pack(fill="both", expand=True, pady=5)
+
+        self.lbl = tk.Label(frm, text="Warte auf Start …", fg="#00FF00", bg="black", font=("Consolas", 12))
+        self.lbl.pack()
 
         btn_frm = tk.Frame(frm, bg="black")
         btn_frm.pack(pady=5)
 
         tk.Button(btn_frm, text="🛑 Stop & Restore WiFi", command=self.stop_all,
-                  bg="#AA0000", fg="white", font=("Consolas", 11), width=20).pack(side="left", padx=5)
+                  bg="#AA0000", fg="white", font=("Consolas", 11)).pack(side="left", padx=5)
 
         tk.Button(btn_frm, text="🍯 Toggle Honey-AP", command=self.toggle_honey,
                   bg="#111", fg="#00FF00", font=("Consolas", 11)).pack(side="left", padx=5)
 
-        self.lbl = tk.Label(frm, text="Ready – waiting for frames …", fg="#00FF00", bg="black", font=("Consolas", 12))
-        self.lbl.pack(pady=5)
+    def start_monitor(self):
+        iface = self.var.get()
+        global MON_IFACE
+        MON_IFACE = mon_up(iface)
+        if not MON_IFACE:
+            msg.showerror("Fehler", "Monitor-Mode konnte nicht aktiviert werden.")
+            return
+        self.lbl.config(text=f"Sniffer läuft auf {MON_IFACE}")
+        honey = [i for i in ifs() if i != MON_IFACE and can_mon(i)]
+        CFG["honey_iface"] = honey[0] if honey else None
+        sniff_start(MON_IFACE)
 
     def add(self, mac, rssi, ch):
         ts = datetime.now().strftime("%H:%M:%S")
         self.tree.insert("", "end", values=(ts, mac, f"{rssi} dBm", ch))
-        self.lbl.config(text="Live – frames incoming …")
+        self.tree.yview_moveto(1)
 
     def toggle_honey(self):
         if not getattr(self, "honey_on", False):
@@ -178,32 +193,15 @@ class MainGUI:
 
     def stop_all(self):
         honey_stop()
-        mon_down(MON_IFACE)
-        self.lbl.config(text="WiFi restored – exiting …")
+        if MON_IFACE:
+            mon_down(MON_IFACE)
+        self.lbl.config(text="WLAN wiederhergestellt – beende …")
         self.root.after(1000, lambda: os._exit(0))
 
 # ---------- MAIN ----------
 def main():
-    base = choose()
-    global MON_IFACE
-    MON_IFACE = mon_up(base)
-    if not MON_IFACE:
-        sys.exit("[!] Monitor-Mode Fehler.")
-
-    honey = [i for i in ifs() if i != MON_IFACE and can_mon(i)]
-    CFG["honey_iface"] = honey[0] if honey else None
-
-    def cleanup(sig, frame):
-        print("\n[!] Restore WiFi & exit …")
-        honey_stop()
-        mon_down(MON_IFACE)
-        sys.exit(0)
-    signal.signal(signal.SIGINT, cleanup)
-
     root = tk.Tk()
-    global GUI
-    GUI = MainGUI(root)
-    sniff_start(MON_IFACE)
+    app = MainGUI(root)
     root.mainloop()
 
 if __name__ == "__main__":
