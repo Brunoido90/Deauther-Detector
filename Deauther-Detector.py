@@ -229,13 +229,33 @@ class DeauthDetectorGUI:
             # Versuche, den Monitor-Modus zu aktivieren (Linux-spezifisch mit airmon-ng)
             try:
                 # airmon-ng check kill beendet störende Prozesse
-                subprocess.run(["airmon-ng", "check", "kill"], check=True, capture_output=True, text=True)
+                check_kill_result = subprocess.run(["airmon-ng", "check", "kill"], check=True, capture_output=True, text=True)
+                self.add_log_entry(f"airmon-ng check kill Output: {check_kill_result.stdout.strip()}", "info")
+                if check_kill_result.stderr:
+                    self.add_log_entry(f"airmon-ng check kill Stderr: {check_kill_result.stderr.strip()}", "warning")
                 self.add_log_entry("Störende Prozesse beendet.", "info")
 
                 # airmon-ng start versetzt die Schnittstelle in den Monitor-Modus
-                result = subprocess.run(["airmon-ng", "start", self.original_interface], check=True, capture_output=True, text=True)
-                output_lines = result.stdout.splitlines()
-                
+                start_monitor_result = subprocess.run(["airmon-ng", "start", self.original_interface], check=True, capture_output=True, text=True)
+                self.add_log_entry(f"airmon-ng start Output: {start_monitor_result.stdout.strip()}", "info")
+                if start_monitor_result.stderr:
+                    self.add_log_entry(f"airmon-ng start Stderr: {start_monitor_result.stderr.strip()}", "warning")
+
+                output_lines = []
+                # Überprüfen, ob die Ausgabe ein String ist, um den Fehler "not text attribute" zu vermeiden
+                if isinstance(start_monitor_result.stdout, str):
+                    output_lines = start_monitor_result.stdout.splitlines()
+                else:
+                    self.add_log_entry(f"FEHLER: airmon-ng start hat unerwarteten Output-Typ geliefert: {type(start_monitor_result.stdout)}. Erwartet wurde String.", "critical")
+                    messagebox.showerror("Fehler", "Unerwarteter Output von airmon-ng. Bitte überprüfen Sie Ihre airmon-ng Installation.")
+                    # Force stop monitoring if unexpected output
+                    self.detection_active = False
+                    self.master.after(0, lambda: self.status_label.config(text="Detektor: Inaktiv"))
+                    self.master.after(0, lambda: self.start_btn.config(text="Start Monitoring"))
+                    self.master.after(0, lambda: self.interface_combobox.config(state="readonly"))
+                    self.master.after(0, lambda: self.scan_btn.config(state="normal"))
+                    return # Funktion frühzeitig beenden
+
                 # Versuche, den Namen der neuen Monitor-Schnittstelle zu finden
                 self.monitor_interface = None
                 for line in output_lines:
