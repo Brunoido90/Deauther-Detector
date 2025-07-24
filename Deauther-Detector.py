@@ -166,31 +166,51 @@ class DeauthDetectorGUI:
             return
 
         try:
-            # Scapy's get_if_list() gibt eine Liste der Schnittstellennamen zurück
-            interfaces = get_if_list()
-            # Filtern, um nur WLAN-Schnittstellen anzuzeigen, wenn möglich (heuristisch)
-            wifi_interfaces = [
-                iface for iface in interfaces 
-                if "wlan" in iface or "mon" in iface or "Wi-Fi" in iface or "Wireless" in iface
+            # Versuche, alle Schnittstellen zu bekommen
+            all_interfaces = get_if_list()
+
+            # Filtern, um nur WLAN-ähnliche Schnittstellen anzuzeigen (heuristisch)
+            wifi_interfaces_filtered = [
+                iface for iface in all_interfaces
+                if "wlan" in iface.lower() or "mon" in iface.lower() or "wi-fi" in iface.lower() or "wireless" in iface.lower()
             ]
-            if not wifi_interfaces:
-                messagebox.showwarning("Keine WLAN-Schnittstellen gefunden", 
-                                       "Es wurden keine offensichtlichen WLAN-Schnittstellen gefunden. "
-                                       "Stellen Sie sicher, dass Ihr Adapter angeschlossen und die Treiber installiert sind.")
+
+            if not wifi_interfaces_filtered:
+                # Wenn keine gefilterten WLAN-Schnittstellen gefunden wurden, zeige alle an
+                messagebox.showwarning("WLAN-Schnittstellen nicht direkt gefunden",
+                                       "Es wurden keine offensichtlichen WLAN-Schnittstellen mit Standardnamen gefunden. "
+                                       "Bitte überprüfen Sie die Liste aller erkannten Schnittstellen in der Dropdown-Liste. "
+                                       "Stellen Sie sicher, dass Ihr Adapter angeschlossen und die Treiber installiert sind, "
+                                       "und dass das Skript mit Administrator-/Root-Rechten läuft.")
+                interfaces_to_display = all_interfaces
+                self.add_log_entry(f"Keine gefilterten WLAN-Schnittstellen gefunden. Zeige alle erkannten Schnittstellen: {', '.join(all_interfaces)}", "warning")
+            else:
+                interfaces_to_display = wifi_interfaces_filtered
+                self.add_log_entry(f"Gefilterte WLAN-Schnittstellen gefunden: {', '.join(wifi_interfaces_filtered)}", "info")
+
+            if not interfaces_to_display:
+                messagebox.showwarning("Keine Schnittstellen gefunden",
+                                       "Scapy konnte überhaupt keine Netzwerkschnittstellen finden. "
+                                       "Stellen Sie sicher, dass Scapy korrekt installiert ist und das Skript mit Administrator-/Root-Rechten läuft.")
                 self.interface_combobox['values'] = []
                 self.interface_combobox.set("")
                 return
 
-            self.interface_combobox['values'] = wifi_interfaces
-            if wifi_interfaces:
-                self.interface_combobox.set(wifi_interfaces[0]) # Ersten als Standard auswählen
-            self.add_log_entry(f"Gefundene Schnittstellen: {', '.join(wifi_interfaces)}", "info")
+            self.interface_combobox['values'] = interfaces_to_display
+            if interfaces_to_display:
+                self.interface_combobox.set(interfaces_to_display[0]) # Ersten als Standard auswählen
 
-        except Exception as e:
-            messagebox.showerror("Fehler", f"Fehler beim Scannen der Schnittstellen: {str(e)}\n"
-                                           "Stellen Sie sicher, dass Sie das Skript mit Administrator-/Root-Rechten ausführen.")
+        except PermissionError:
+            messagebox.showerror("Fehler", "Berechtigungsfehler beim Scannen der Schnittstellen. "
+                                           "Bitte stellen Sie sicher, dass Sie das Skript mit Administrator-/Root-Rechten ausführen (z.B. mit 'sudo').")
             self.interface_combobox['values'] = []
             self.interface_combobox.set("")
+            self.add_log_entry("Fehler: Berechtigungsfehler beim Scannen der Schnittstellen.", "critical")
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Ein unerwarteter Fehler ist beim Scannen der Schnittstellen aufgetreten: {str(e)}")
+            self.interface_combobox['values'] = []
+            self.interface_combobox.set("")
+            self.add_log_entry(f"Unerwarteter Fehler beim Scannen der Schnittstellen: {str(e)}", "critical")
 
     def toggle_monitoring(self):
         if not SCAPY_AVAILABLE:
