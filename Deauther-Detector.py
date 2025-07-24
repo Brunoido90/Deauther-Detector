@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-DeAuth-Guard Elite – komplett, stabil, mit sofortigem Interface-Up
-sudo python3 deauth_elite.py
+DeAuth-Guard Complete
+- Stop-Knopf
+- WLAN nach Beenden wiederherstellen
+sudo python3 deauth_complete.py
 """
 import os, sys, time, threading, subprocess, signal
 from datetime import datetime
@@ -14,136 +16,128 @@ except ImportError:
 try:
     import tkinter as tk
     from tkinter import ttk
-    HAS_GUI = True
+    HAS_TK = True
 except ImportError:
-    HAS_GUI = False
+    HAS_TK = False
 
 CFG = {
-    "deauth_threshold": 3,
-    "history_seconds": 1,
-    "honey_ssid": "🍯_Free_WiFi",
-    "honey_channel": 6,
-    "log_file": "/tmp/deauth_alerts.log"
+    "thr": 3,
+    "hist": 1,
+    "ssid": "🍯_Free_WiFi",
+    "chan": 6,
+    "log": "/tmp/deauth.log"
 }
 
-HISTORY = {}
+HISTORY   = {}
 MON_IFACE = None
-HONEY_PROC = []
+SNIFF_TH  = None
+H_PROC    = []
 
-# ---------- UTILS ----------
-def run(cmd, capture=False):
-    if capture:
-        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
-    subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# ---------- UTIL ----------
+def run(cmd, cap=False):
+    return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip() if cap else subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def interfaces():
-    return run("iw dev | awk '/Interface/ {print $2}'", capture=True).split()
+def ifs():
+    return run("iw dev | awk '/Interface/ {print $2}'", cap=True).split()
 
-def phy_info(iface):
-    phy = run(f"iw dev {iface} info | grep wiphy | awk '{{print $2}}'", capture=True)
-    return run(f"iw phy phy{phy} info", capture=True)
+def can_mon(iface):
+    phy = run(f"iw dev {iface} info | grep wiphy | awk '{{print $2}}'", cap=True)
+    return "monitor" in run(f"iw phy phy{phy} info", cap=True).lower()
 
-def can_monitor(iface):
-    return "monitor" in phy_info(iface).lower()
-
-def choose_adapter():
+def choose():
     env = os.getenv("IFACE")
-    if env and env in interfaces() and can_monitor(env):
+    if env and env in ifs() and can_mon(env):
         return env
-    candidates = [i for i in interfaces() if can_monitor(i)]
-    if not candidates:
-        sys.exit("[!] Kein Monitor-fähiger WLAN-Adapter.")
-    print("\n[+] Adapter:")
-    for idx, iface in enumerate(candidates, 1):
-        print(f"  {idx}) {iface}")
+    cand = [i for i in ifs() if can_mon(i)]
+    if not cand:
+        sys.exit("[!] Kein Monitor-Adapter.")
+    for idx, i in enumerate(cand, 1):
+        print(f"  {idx}) {i}")
     sel = input("Wählen [1]: ").strip() or "1"
-    try:
-        return candidates[int(sel) - 1]
-    except (IndexError, ValueError):
-        sys.exit("[!] Ungültig.")
+    return cand[int(sel) - 1]
 
-def enable_monitor(iface):
+def mon_up(iface):
     run("airmon-ng check kill")
     run(f"airmon-ng start {iface}")
-    mon = next((i for i in interfaces() if i.endswith("mon")), None)
+    mon = next((x for x in ifs() if x.endswith("mon")), None)
+    run(f"ip link set {mon} up")
     return mon
 
-def disable_monitor(mon):
+def mon_down(mon):
     run(f"airmon-ng stop {mon}")
     run("systemctl restart NetworkManager")
 
-def log_event(mac, rssi, ch):
+def log(mac, rssi, ch):
     ts = datetime.now().strftime("%H:%M:%S")
-    line = f"{ts}  {mac}  RSSI:{rssi} dBm  CH:{ch}\n"
+    line = f"{ts} {mac} {rssi} dBm CH:{ch}\n"
     print(line.strip())
-    with open(CFG["log_file"], "a") as f:
+    with open(CFG["log"], "a") as f:
         f.write(line)
 
 # ---------- SNIFF ----------
 def detect(pkt):
     if not pkt.haslayer(Dot11Deauth):
         return
-    mac = pkt.addr2
+    mac  = pkt.addr2
     rssi = pkt[RadioTap].dBm_AntSignal if pkt.haslayer(RadioTap) else "?"
-    ch = pkt[RadioTap].ChannelFrequency if pkt.haslayer(RadioTap) else "?"
-    now = time.time()
+    ch   = pkt[RadioTap].ChannelFrequency if pkt.haslayer(RadioTap) else "?"
+    now  = time.time()
     HISTORY.setdefault(mac, []).append(now)
-    HISTORY[mac] = [t for t in HISTORY[mac] if now - t < CFG["history_seconds"]]
-    if len(HISTORY[mac]) >= CFG["deauth_threshold"]:
+    HISTORY[mac] = [t for t in HISTORY[mac] if now - t < CFG["hist"]]
+    if len(HISTORY[mac]) >= CFG["thr"]:
         HISTORY[mac] = []
-        log_event(mac, rssi, ch)
-        if HAS_GUI and GUI:
-            GUI.add(mac, rssi, ch)
+        log(mac, rssi, ch)
+        GUI.add(mac, rssi, ch)
 
-def start_sniffer(iface):
-    try:
-        sniff(iface=iface, prn=detect, store=False)
-    except Exception as e:
-        print("[!] Sniffer-Fehler:", e)
+def sniff_start(iface):
+    global SNIFF_TH
+    SNIFF_TH = threading.Thread(target=lambda: sniff(iface=iface, prn=detect, store=False, monitor=True), daemon=True)
+    SNIFF_TH.start()
+
+def sniff_stop():
+    global SNIFF_TH
+    if SNIFF_TH and SNIFF_TH.is_alive():
+        os._exit(0)   # hart beenden – tkinter & sniff sauber trennen
 
 # ---------- HONEY ----------
-def start_honey(iface):
-    run(f"ip link set {iface} down")
-    run(f"ip link set {iface} up")
-    run(f"ip addr flush dev {iface}")
-    run(f"ip addr add 192.168.66.1/24 dev {iface}")
-    hostapd_conf = f"""
+def honey_start(iface):
+    run(f"ip link set {iface} down && ip link set {iface} up")
+    run(f"ip addr flush dev {iface} && ip addr add 192.168.66.1/24 dev {iface}")
+    open("/tmp/hg_hostapd.conf", "w").write(f"""
 interface={iface}
-ssid={CFG["honey_ssid"]}
-channel={CFG["honey_channel"]}
+ssid={CFG["ssid"]}
+channel={CFG["chan"]}
 driver=nl80211
 hw_mode=g
 wpa=0
-"""
-    dnsmasq_conf = f"""
+""")
+    open("/tmp/hg_dnsmasq.conf", "w").write(f"""
 interface={iface}
 dhcp-range=192.168.66.10,192.168.66.50,255.255.255.0,12h
-"""
-    open("/tmp/hg_hostapd.conf", "w").write(hostapd_conf)
-    open("/tmp/hg_dnsmasq.conf", "w").write(dnsmasq_conf)
-    subprocess.run(["hostapd", "-B", "/tmp/hg_hostapd.conf"], stdout=subprocess.DEVNULL)
-    subprocess.run(["dnsmasq", "-C", "/tmp/hg_dnsmasq.conf"], stdout=subprocess.DEVNULL)
-    print(f"[+] Honey-AP '{CFG['honey_ssid']}' läuft auf {iface}")
+""")
+    H_PROC.extend([
+        subprocess.Popen(["hostapd", "-B", "/tmp/hg_hostapd.conf"]),
+        subprocess.Popen(["dnsmasq", "-C", "/tmp/hg_dnsmasq.conf"])
+    ])
+    print("[+] Honey-AP ON")
 
-def stop_honey():
-    run("pkill -f hostapd")
-    run("pkill -f dnsmasq")
-    for p in HONEY_PROC:
+def honey_stop():
+    run("pkill -f hostapd; pkill -f dnsmasq")
+    for p in H_PROC:
         p.terminate()
 
-# ---------- ELITE GUI ----------
-class EliteGUI:
+# ---------- GUI ----------
+GUI = None
+
+class MainGUI:
     def __init__(self, root):
         self.root = root
-        root.title("DeAuth-Guard Elite")
+        root.title("DeAuth-Guard Complete")
         root.configure(bg="black")
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("Treeview", background="black", foreground="#00FF00",
-                        fieldbackground="black", font=("Consolas", 11))
+        style.configure("Treeview", background="black", foreground="#00FF00", fieldbackground="black", font=("Consolas", 11))
         style.map("Treeview", background=[("selected", "#003300")])
-        style.configure("Treeview.Heading", background="#111", foreground="#00FF00",
-                        font=("Consolas", 11, "bold"))
 
         frm = tk.Frame(root, bg="black")
         frm.pack(fill="both", expand=True, padx=10, pady=10)
@@ -154,61 +148,62 @@ class EliteGUI:
             self.tree.column(col, width=120, anchor="center")
         self.tree.pack(fill="both", expand=True)
 
-        self.lbl = tk.Label(frm, text="Honey-AP: OFF", fg="#00FF00", bg="black", font=("Consolas", 12))
-        self.lbl.pack(pady=5)
+        btn_frm = tk.Frame(frm, bg="black")
+        btn_frm.pack(pady=5)
 
-        btn = tk.Button(frm, text="🍯 Toggle Honey-AP", command=self.toggle_honey,
-                        bg="#111", fg="#00FF00", font=("Consolas", 11), relief="flat", overrelief="groove")
-        btn.pack(pady=5)
+        tk.Button(btn_frm, text="🛑 Stop & Restore WiFi", command=self.stop_all,
+                  bg="#AA0000", fg="white", font=("Consolas", 11), width=20).pack(side="left", padx=5)
+
+        tk.Button(btn_frm, text="🍯 Toggle Honey-AP", command=self.toggle_honey,
+                  bg="#111", fg="#00FF00", font=("Consolas", 11)).pack(side="left", padx=5)
+
+        self.lbl = tk.Label(frm, text="Ready – waiting for frames …", fg="#00FF00", bg="black", font=("Consolas", 12))
+        self.lbl.pack(pady=5)
 
     def add(self, mac, rssi, ch):
         ts = datetime.now().strftime("%H:%M:%S")
         self.tree.insert("", "end", values=(ts, mac, f"{rssi} dBm", ch))
-        self.tree.yview_moveto(1)
+        self.lbl.config(text="Live – frames incoming …")
 
     def toggle_honey(self):
-        if not hasattr(self, "honey_on") or not self.honey_on:
+        if not getattr(self, "honey_on", False):
             if CFG.get("honey_iface"):
-                start_honey(CFG["honey_iface"])
+                honey_start(CFG["honey_iface"])
                 self.honey_on = True
                 self.lbl.config(text="Honey-AP: ON 🍯")
         else:
-            stop_honey()
+            honey_stop()
             self.honey_on = False
             self.lbl.config(text="Honey-AP: OFF")
 
+    def stop_all(self):
+        honey_stop()
+        mon_down(MON_IFACE)
+        self.lbl.config(text="WiFi restored – exiting …")
+        self.root.after(1000, lambda: os._exit(0))
+
 # ---------- MAIN ----------
 def main():
-    print(r"""
-   ____          _    ____ _   _ _____ ____
-  |  _ \  ___   / \  / ___| | | | ____/ ___|
-  | | | |/ _ \ / _ \| |   | |_| |  _| \___ \
-  | |_| | (_) / ___ \ |___|  _  | |___ ___) |
-  |____/ \___/_/   \_\____|_| |_|_____|____/  v1.4
-          -= Live De-Auth Detector & HoneyPot =-
-    """)
-    base = choose_adapter()
-    MON_IFACE = enable_monitor(base)
+    base = choose()
+    global MON_IFACE
+    MON_IFACE = mon_up(base)
     if not MON_IFACE:
         sys.exit("[!] Monitor-Mode Fehler.")
 
-    # Interface hochfahren (Fix "network is down")
-    run(f"ip link set {MON_IFACE} up")
-
-    honey = [i for i in interfaces() if i != MON_IFACE and can_monitor(i)]
+    honey = [i for i in ifs() if i != MON_IFACE and can_mon(i)]
     CFG["honey_iface"] = honey[0] if honey else None
 
     def cleanup(sig, frame):
-        print("\n[!] Cleanup…")
-        stop_honey()
-        disable_monitor(MON_IFACE)
+        print("\n[!] Restore WiFi & exit …")
+        honey_stop()
+        mon_down(MON_IFACE)
         sys.exit(0)
     signal.signal(signal.SIGINT, cleanup)
 
-    global GUI
     root = tk.Tk()
-    GUI = EliteGUI(root)
-    threading.Thread(target=start_sniffer, args=(MON_IFACE,), daemon=True).start()
+    global GUI
+    GUI = MainGUI(root)
+    sniff_start(MON_IFACE)
     root.mainloop()
 
 if __name__ == "__main__":
