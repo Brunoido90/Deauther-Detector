@@ -185,9 +185,27 @@ class DeauthDetectorGUI:
             messagebox.showerror("Error", "Permission error when scanning interfaces. "
                                            "Please ensure you run the script with administrator/root privileges (e.g., with 'sudo').")
             self.add_log_entry("Error: Permission error when scanning interfaces.", "critical")
+            # Ensure GUI elements are re-enabled
+            self.interface_entry.config(state="normal")
+            self.scan_btn.config(state="normal")
         except Exception as e:
             messagebox.showerror("Error", f"An unexpected error occurred while scanning interfaces: {str(e)}")
             self.add_log_entry(f"Unexpected error when scanning interfaces: {str(e)}", "critical")
+            # Ensure GUI elements are re-enabled
+            self.interface_entry.config(state="normal")
+            self.scan_btn.config(state="normal")
+
+    def _reset_gui_on_error(self):
+        """Resets GUI elements to their initial state after an error during monitoring setup."""
+        self.detection_active = False
+        self.status_label.config(text="Detector: Inactive")
+        self.start_btn.config(text="Start Monitoring")
+        self.interface_entry.config(state="normal")
+        self.scan_btn.config(state="normal")
+        self.monitor_interface = None
+        self.original_interface = None
+        # No need to explicitly stop sniff_thread here, as the error likely came from within it,
+        # or it will terminate due to detection_active being False.
 
     def toggle_monitoring(self):
         if not SCAPY_AVAILABLE:
@@ -201,36 +219,32 @@ class DeauthDetectorGUI:
                 return
 
             self.original_interface = selected_interface # Store for later reset
-            self.add_log_entry(f"Attempting to put interface {self.original_interface} into monitor mode...", "info")
             
             # Attempt to activate monitor mode (Linux-specific with airmon-ng)
             try:
                 # airmon-ng check kill terminates interfering processes
+                self.add_log_entry("Attempting to stop interfering processes with 'airmon-ng check kill'...", "info")
                 check_kill_result = subprocess.run(["airmon-ng", "check", "kill"], check=True, capture_output=True, text=True)
-                self.add_log_entry(f"airmon-ng check kill Output: {check_kill_result.stdout.strip()}", "info")
+                self.add_log_entry(f"airmon-ng check kill stdout: {check_kill_result.stdout.strip()}", "info")
                 if check_kill_result.stderr:
-                    self.add_log_entry(f"airmon-ng check kill Stderr: {check_kill_result.stderr.strip()}", "warning")
-                self.add_log_entry("Interfering processes terminated.", "info")
+                    self.add_log_entry(f"airmon-ng check kill stderr: {check_kill_result.stderr.strip()}", "warning")
+                self.add_log_entry("Interfering processes terminated (if any).", "info")
 
                 # airmon-ng start puts the interface into monitor mode
+                self.add_log_entry(f"Attempting to start monitor mode on {self.original_interface} with 'airmon-ng start'...", "info")
                 start_monitor_result = subprocess.run(["airmon-ng", "start", self.original_interface], check=True, capture_output=True, text=True)
-                self.add_log_entry(f"airmon-ng start Output: {start_monitor_result.stdout.strip()}", "info")
+                self.add_log_entry(f"airmon-ng start stdout: {start_monitor_result.stdout.strip()}", "info")
                 if start_monitor_result.stderr:
-                    self.add_log_entry(f"airmon-ng start Stderr: {start_monitor_result.stderr.strip()}", "warning")
+                    self.add_log_entry(f"airmon-ng start stderr: {start_monitor_result.stderr.strip()}", "warning")
 
                 output_lines = []
                 # Check if the output is a string to avoid "not text attribute" error
                 if isinstance(start_monitor_result.stdout, str):
                     output_lines = start_monitor_result.stdout.splitlines()
                 else:
-                    self.add_log_entry(f"ERROR: airmon-ng start returned unexpected output type: {type(start_monitor_result.stdout)}. Expected string.", "critical")
-                    messagebox.showerror("Error", "Unexpected output from airmon-ng. Please check your airmon-ng installation.")
-                    # Force stop monitoring if unexpected output
-                    self.detection_active = False
-                    self.master.after(0, lambda: self.status_label.config(text="Detector: Inactive"))
-                    self.master.after(0, lambda: self.start_btn.config(text="Start Monitoring"))
-                    self.master.after(0, lambda: self.interface_entry.config(state="normal"))
-                    self.master.after(0, lambda: self.scan_btn.config(state="normal"))
+                    self.add_log_entry(f"ERROR: airmon-ng start returned unexpected output type for stdout: {type(start_monitor_result.stdout)}. Expected string.", "critical")
+                    messagebox.showerror("Error", "Unexpected output from airmon-ng. Please check your airmon-ng installation and ensure it's compatible with your Python environment.")
+                    self._reset_gui_on_error() # Call helper to reset GUI state
                     return # Exit function early
 
                 # Attempt to find the name of the new monitor interface
@@ -279,13 +293,16 @@ class DeauthDetectorGUI:
             except FileNotFoundError:
                 messagebox.showerror("Error", "airmon-ng not found. Please install aircrack-ng (sudo apt install aircrack-ng).")
                 self.add_log_entry("Error: airmon-ng not found.", "critical")
+                self._reset_gui_on_error() # Call helper to reset GUI state
             except subprocess.CalledProcessError as e:
                 messagebox.showerror("Error", f"Error executing airmon-ng: {e.stderr}\n"
                                                "Please ensure you run the script with administrator/root privileges.")
                 self.add_log_entry(f"Error with airmon-ng: {e.stderr}", "critical")
+                self._reset_gui_on_error() # Call helper to reset GUI state
             except Exception as e:
                 messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
                 self.add_log_entry(f"Unexpected error: {str(e)}", "critical")
+                self._reset_gui_on_error() # Call helper to reset GUI state
             
         else: # Stop Monitoring
             self.detection_active = False
@@ -334,19 +351,11 @@ class DeauthDetectorGUI:
         except PermissionError:
             messagebox.showerror("Error", "No permission for sniffing. Run the script as administrator/root.")
             self.data_queue.put({"type": "error", "message": "No permission for sniffing."})
-            self.detection_active = False
-            self.master.after(0, lambda: self.status_label.config(text="Detector: Inactive"))
-            self.master.after(0, lambda: self.start_btn.config(text="Start Monitoring"))
-            self.master.after(0, lambda: self.interface_entry.config(state="normal"))
-            self.master.after(0, lambda: self.scan_btn.config(state="normal"))
+            self._reset_gui_on_error() # Call helper to reset GUI state
         except Exception as e:
             messagebox.showerror("Error", f"Error sniffing on {interface}: {str(e)}")
             self.data_queue.put({"type": "error", "message": f"Sniffing error: {str(e)}"})
-            self.detection_active = False
-            self.master.after(0, lambda: self.status_label.config(text="Detector: Inactive"))
-            self.master.after(0, lambda: self.start_btn.config(text="Start Monitoring"))
-            self.master.after(0, lambda: self.interface_entry.config(state="normal"))
-            self.master.after(0, lambda: self.scan_btn.config(state="normal"))
+            self._reset_gui_on_error() # Call helper to reset GUI state
 
 
     def packet_callback(self, packet):
