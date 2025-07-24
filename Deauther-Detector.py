@@ -1,79 +1,41 @@
 #!/usr/bin/env python3
-# deauth_pro.py – Ultra-professioneller, vollautomatischer Deauth-Detector + Honeybot
-# Dark-Theme, Live-Dashboard, CSV/JSON/PDF-Export, Themes, Hilfe & mehr
+# deauth_pro.py – Ultra-professioneller Deauth-Detector mit Interface-Wähler
+# Dark/Light-Theme, Live-Dashboard, Export, Filter, Hilfe
 
 import tkinter as tk, tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox
-import threading, queue, json, csv, datetime, os, sys, subprocess, re, webbrowser, platform
+import threading, queue, json, csv, datetime, subprocess, os, sys, time
 from pathlib import Path
-
-# Matplotlib
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-import matplotlib.pyplot as plt
+from scapy.all import sniff, Dot11Deauth, Dot11ProbeReq, conf
 
-# Scapy
-from scapy.all import sniff, Dot11Deauth, Dot11ProbeReq
-
-# Optional: ReportLab für PDF (wenn vorhanden)
-try:
-    from reportlab.pdfgen import canvas as pdfcanvas
-    PDF_AVAILABLE = True
-except ImportError:
-    PDF_AVAILABLE = False
-
-# -------------------------------------------------
-# Interface-Handling
-# -------------------------------------------------
+# ---------- Interface-Wahl ----------
 IFACE_MON = None
+IFACES_LIST = []
 
-def get_monitor_iface():
+def list_wireless_ifaces():
     try:
         out = subprocess.check_output(["iw", "dev"], text=True)
-        for line in out.splitlines():
-            m = re.search(r"Interface\s+(\S+mon\S*)", line)
-            if m:
-                return m.group(1).strip()
-    except Exception:
-        pass
-    return None
+        return [line.split()[-1] for line in out.splitlines() if "Interface" in line]
+    except:
+        return []
 
-def create_monitor(iface):
+def set_monitor(iface):
+    global IFACE_MON
     subprocess.run(["ip", "link", "set", iface, "down"], check=False)
     subprocess.run(["iw", iface, "set", "monitor", "none"], check=False)
     subprocess.run(["ip", "link", "set", iface, "up"], check=False)
-    return iface
+    IFACE_MON = iface
 
-def prepare_interface():
-    global IFACE_MON
-    phy = None
-    try:
-        out = subprocess.check_output(["iw", "dev"], text=True)
-        for ln in out.splitlines():
-            if ln.strip().startswith("Interface"):
-                phy = ln.strip().split()[-1]
-                break
-    except:
-        pass
-    if not phy:
-        messagebox.showerror("Interface", "Kein WLAN-Interface gefunden!")
-        sys.exit(1)
-    create_monitor(phy)
-    IFACE_MON = phy
-
-# -------------------------------------------------
-# Model
-# -------------------------------------------------
+# ---------- Model ----------
 gui_queue = queue.Queue()
-
 class EventModel:
     def __init__(self):
-        self.events = []
-        self.deauth_counter = {}
+        self.events, self.deauth_counter = [], {}
         self.lock = threading.Lock()
-
     def add(self, typ, sender, target, rssi, ts=None):
         ts = ts or datetime.datetime.now()
         with self.lock:
@@ -81,12 +43,9 @@ class EventModel:
                                 "target": target, "rssi": rssi})
             if typ == "Deauth":
                 self.deauth_counter[sender] = self.deauth_counter.get(sender, 0) + 1
-
 model = EventModel()
 
-# -------------------------------------------------
-# Sniffer-Thread
-# -------------------------------------------------
+# ---------- Sniffer ----------
 def sniff_worker():
     def handler(p):
         if p.haslayer(Dot11Deauth):
@@ -99,110 +58,85 @@ def sniff_worker():
             sender = p.addr2
             if sender and sender != "aa:bb:cc:dd:ee:ff":
                 with model.lock:
-                    recent = [e for e in model.events[-50:] if e["sender"] == sender and e["typ"] == "Probe-Req"]
-                    if not recent:
+                    if not any(e["sender"] == sender and e["typ"] == "Probe-Req" for e in model.events[-50:]):
                         model.add("Probe-Req", sender, "-", "-")
                         gui_queue.put(("update",))
     sniff(iface=IFACE_MON, prn=handler, store=0)
 
-# -------------------------------------------------
-# Themes
-# -------------------------------------------------
+# ---------- Themes ----------
 THEMES = {
-    "Dark": {"bg": "#1e1e1e", "fg": "#ffffff", "accent": "#0078d4", "sel": "#ff5252"},
-    "Light": {"bg": "#ffffff", "fg": "#000000", "accent": "#0078d4", "sel": "#ff5252"}
+    "Dark":  {"bg":"#1e1e1e","fg":"#ffffff","accent":"#0078d4","sel":"#ff5252"},
+    "Light": {"bg":"#ffffff","fg":"#000000","accent":"#0078d4","sel":"#ff5252"}
 }
-
 class ThemeEngine:
     def __init__(self, root, theme="Dark"):
-        self.root = root
-        self.theme = theme
-        self.colors = THEMES[theme]
-
+        self.root, self.colors = root, THEMES[theme]
     def apply(self, tree, fig, ax):
         style = ttk.Style()
         style.theme_use("clam")
-        bg, fg, accent, sel = self.colors["bg"], self.colors["fg"], self.colors["accent"], self.colors["sel"]
+        bg, fg, acc, sel = self.colors["bg"], self.colors["fg"], self.colors["accent"], self.colors["sel"]
         self.root.configure(bg=bg)
         style.configure("Treeview", background=bg, foreground=fg, fieldbackground=bg, rowheight=24)
-        style.map("Treeview", background=[("selected", accent)])
-        style.configure("TButton", background=accent, foreground=fg, borderwidth=0)
+        style.map("Treeview", background=[("selected", acc)])
+        style.configure("TButton", background=acc, foreground="white", borderwidth=0)
         style.map("TButton", background=[("active", "#106ebe")])
         fig.patch.set_facecolor(bg)
         ax.set_facecolor(bg)
         ax.tick_params(colors=fg)
         ax.title.set_color(fg)
 
-# -------------------------------------------------
-# PDF-Export
-# -------------------------------------------------
-def export_pdf(path):
-    if not PDF_AVAILABLE:
-        messagebox.showwarning("PDF", "reportlab nicht installiert – PDF-Export deaktiviert.")
-        return
-    c = pdfcanvas.Canvas(str(path))
-    c.setFont("Helvetica", 10)
-    c.drawString(50, 800, "Deauth-Detector Report – " + str(datetime.datetime.now()))
-    y = 780
-    with model.lock:
-        for e in model.events[-100:]:
-            line = f"{e['ts']:%H:%M:%S}  {e['typ']}  {e['sender']} → {e['target']}  RSSI:{e['rssi']}"
-            c.drawString(50, y, line)
-            y -= 12
-            if y < 50:
-                c.showPage()
-                y = 800
-    c.save()
-
-# -------------------------------------------------
-# GUI
-# -------------------------------------------------
+# ---------- GUI ----------
 class DeauthApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Deauth Pro Detector")
-        self.root.geometry("1400x800")
-        self.theme = ThemeEngine(root, "Dark")
-
-        # Menüleiste
-        menubar = tk.Menu(root)
-        filemenu = tk.Menu(menubar, tearoff=0)
-        filemenu.add_command(label="Export JSON", command=self.export_json)
-        filemenu.add_command(label="Export CSV",  command=self.export_csv)
-        filemenu.add_command(label="Export PDF",  command=self.export_pdf)
-        filemenu.add_separator()
-        filemenu.add_command(label="Exit", command=root.quit)
-        menubar.add_cascade(label="File", menu=filemenu)
-
-        helpmenu = tk.Menu(menubar, tearoff=0)
-        helpmenu.add_command(label="About", command=self.show_about)
-        menubar.add_cascade(label="Help", menu=helpmenu)
-        root.config(menu=menubar)
-
-        # Toolbar
-        toolbar = ttk.Frame(root)
-        toolbar.pack(fill=tk.X, padx=5, pady=5)
-        ttk.Button(toolbar, text="Start Sniffing", command=self.start_sniffing).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Clear", command=self.clear).pack(side=tk.LEFT, padx=2)
-
-        # Notebook (Tabs)
-        nb = ttk.Notebook(root)
+        self.root.geometry("1400x850")
+        self.theme = ThemeEngine(root,"Dark")
+        self.build_menu()
+        self.build_toolbar()
+        self.build_main()
+        self.theme.apply(self.tree, self.fig, self.ax)
+        self.root.after(200,self.process_queue)
+    # ---------- Menü ----------
+    def build_menu(self):
+        menubar = tk.Menu(self.root)
+        filem = tk.Menu(menubar,tearoff=0)
+        filem.add_command(label="JSON Export", command=self.export_json)
+        filem.add_command(label="CSV Export",  command=self.export_csv)
+        filem.add_separator()
+        filem.add_command(label="Exit", command=self.root.quit)
+        menubar.add_cascade(label="File", menu=filem)
+        helpm = tk.Menu(menubar,tearoff=0)
+        helpm.add_command(label="About", command=lambda: messagebox.showinfo("About","Deauth Pro v2.0"))
+        menubar.add_cascade(label="Help", menu=helpm)
+        self.root.config(menu=menubar)
+    # ---------- Toolbar mit Interface-Wähler ----------
+    def build_toolbar(self):
+        tb = ttk.Frame(self.root)
+        tb.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(tb, text="Interface:").pack(side=tk.LEFT, padx=2)
+        self.iface_combo = ttk.Combobox(tb, values=IFACES_LIST, state="readonly", width=15)
+        self.iface_combo.pack(side=tk.LEFT, padx=2)
+        self.iface_combo.set(IFACES_LIST[0] if IFACES_LIST else "")
+        ttk.Button(tb, text="Apply & Start", command=self.apply_iface).pack(side=tk.LEFT, padx=5)
+        ttk.Button(tb, text="Clear", command=self.clear).pack(side=tk.LEFT, padx=2)
+    # ---------- Main ----------
+    def build_main(self):
+        nb = ttk.Notebook(self.root)
         nb.pack(fill=tk.BOTH, expand=True)
-        main_frame = ttk.Frame(nb)
-        nb.add(main_frame, text="Dashboard")
-
-        # Paned Window
-        paned = ttk.PanedWindow(main_frame, orient=tk.VERTICAL)
+        self.main_frame = ttk.Frame(nb)
+        nb.add(self.main_frame, text="Dashboard")
+        paned = ttk.PanedWindow(self.main_frame, orient=tk.VERTICAL)
         paned.pack(fill=tk.BOTH, expand=True)
 
-        # Oben: Treeview
+        # Oben: Tree
         tree_frame = ttk.Frame(paned)
         paned.add(tree_frame, weight=3)
         cols = ("Time", "Type", "Sender MAC", "Target MAC", "RSSI (dBm)")
-        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=20)
+        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=22)
         for col in cols:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=200, anchor="center")
+            self.tree.column(col, width=220, anchor="center")
         self.tree.tag_configure("suspicious", background="#ff5252")
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
@@ -212,19 +146,12 @@ class DeauthApp:
         # Unten: Chart
         chart_frame = ttk.Frame(paned)
         paned.add(chart_frame, weight=2)
-        self.fig = Figure(figsize=(6, 3), dpi=100)
+        self.fig = Figure(figsize=(8,3), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, chart_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        # Status-Bar
-        self.status = tk.Label(root, text="Bereit", anchor=tk.W, bg="#0078d4", fg="white")
-        self.status.pack(side=tk.BOTTOM, fill=tk.X)
-
-        self.theme.apply(self.tree, self.fig, self.ax)
-        self.root.after(200, self.process_queue)
-        self.start_sniffing()
-
+    # ---------- Queue ----------
     def process_queue(self):
         try:
             while True:
@@ -234,7 +161,7 @@ class DeauthApp:
         except queue.Empty:
             pass
         self.root.after(250, self.process_queue)
-
+    # ---------- Refresh ----------
     def refresh(self):
         for child in self.tree.get_children():
             self.tree.delete(child)
@@ -260,50 +187,46 @@ class DeauthApp:
             self.ax.set_title("Deauth-Rate pro MAC (letzte 60 s)", color=self.theme.colors["fg"])
             self.fig.tight_layout()
             self.canvas.draw()
-            self.status.config(text=f"Aktuelle Events: {len(recent)}")
-
+    # ---------- Interface wählen ----------
+    def apply_iface(self):
+        iface = self.iface_combo.get()
+        if not iface:
+            messagebox.showwarning("Interface", "Kein Interface ausgewählt.")
+            return
+        set_monitor(iface)
+        self.root.title(f"Deauth Pro Detector – {iface}")
+        self.start_sniffing()
     def start_sniffing(self):
         threading.Thread(target=sniff_worker, daemon=True).start()
-
-    def clear(self):
-        with model.lock:
-            model.events.clear()
-            model.deauth_counter.clear()
-        self.refresh()
-
+    # ---------- Export ----------
     def export_json(self):
-        path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
+        path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON","*.json")])
         if path:
-            with open(path, "w") as f:
+            with open(path,"w") as f:
                 with model.lock:
-                    json.dump([{**e, "ts": str(e["ts"])} for e in model.events], f, indent=2)
-
+                    json.dump([{**e,"ts":str(e["ts"])} for e in model.events],f,indent=2)
     def export_csv(self):
-        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
+        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV","*.csv")])
         if path:
-            with open(path, "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(["Time", "Type", "Sender MAC", "Target MAC", "RSSI"])
+            with open(path,"w",newline="") as f:
+                writer=csv.writer(f)
+                writer.writerow(["Time","Type","Sender MAC","Target MAC","RSSI"])
                 with model.lock:
                     for e in model.events:
-                        writer.writerow([e["ts"], e["typ"], e["sender"], e["target"], e["rssi"]])
-
-    def export_pdf(self):
-        path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF", "*.pdf")])
-        if path:
-            export_pdf(path)
-            messagebox.showinfo("Export", "PDF gespeichert.")
-
-    def show_about(self):
-        messagebox.showinfo("About", "Deauth Pro Detector\nv1.0 – ultra-professionell\n(c) 2025")
-
+                        writer.writerow([e["ts"],e["typ"],e["sender"],e["target"],e["rssi"]])
+    def clear(self):
+        with model.lock:
+            model.events.clear(); model.deauth_counter.clear()
+        self.refresh()
     def on_close(self):
         self.root.quit()
 
-# -------------------------------------------------
-# Main
-# -------------------------------------------------
+# ---------- Main ----------
 if __name__ == "__main__":
+    IFACES_LIST = list_wireless_ifaces()
+    if not IFACES_LIST:
+        messagebox.showerror("Interface", "Kein WLAN-Interface gefunden!\nStarte 'sudo airmon-ng start wlan0' und erneut.")
+        sys.exit(1)
     prepare_interface()
     root = tk.Tk()
     DeauthApp(root)
