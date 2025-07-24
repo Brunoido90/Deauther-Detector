@@ -274,6 +274,17 @@ class DeauthDetectorGUI:
                         self.monitor_interface = self.original_interface + "mon" 
                     self.add_log_entry(f"Could not clearly extract monitor interface from airmon-ng output. Trying: {self.monitor_interface}", "warning")
 
+                # --- NEW CHECK: Verify if the monitor interface is found by Scapy ---
+                if self.monitor_interface not in get_if_list():
+                    error_msg = f"Monitor interface '{self.monitor_interface}' not found by Scapy after airmon-ng. " \
+                                "This might indicate a driver issue, a problem with airmon-ng, or incorrect privileges. " \
+                                "Please check your system configuration and ensure the adapter fully supports monitor mode."
+                    self.add_log_entry(f"ERROR: {error_msg}", "critical")
+                    messagebox.showerror("Error", error_msg)
+                    self._reset_gui_on_error()
+                    return
+                # --- END NEW CHECK ---
+
                 self.add_log_entry(f"Interface {self.original_interface} successfully put into monitor mode. New interface: {self.monitor_interface}", "info")
                 
                 # Update GUI to show the monitor interface
@@ -347,14 +358,16 @@ class DeauthDetectorGUI:
         """Starts the Scapy sniffing process."""
         try:
             # filter='type management subtype deauth' is the filter for deauth packets
+            self.add_log_entry(f"Starting Scapy sniff on interface: {interface}...", "info")
             sniff(iface=interface, prn=self.packet_callback, stop_filter=lambda x: not self.detection_active, store=0)
-        except PermissionError:
-            messagebox.showerror("Error", "No permission for sniffing. Run the script as administrator/root.")
-            self.data_queue.put({"type": "error", "message": "No permission for sniffing."})
+            self.add_log_entry(f"Scapy sniff on {interface} stopped.", "info")
+        except PermissionError as e:
+            messagebox.showerror("Error", f"Permission error during sniffing: {e}. Run the script as administrator/root.")
+            self.data_queue.put({"type": "error", "message": f"Permission error during sniffing: {e}"})
             self._reset_gui_on_error() # Call helper to reset GUI state
         except Exception as e:
             messagebox.showerror("Error", f"Error sniffing on {interface}: {str(e)}")
-            self.data_queue.put({"type": "error", "message": f"Sniffing error: {str(e)}"})
+            self.data_queue.put({"type": "error", "message": f"Sniffing error on {interface}: {str(e)}"})
             self._reset_gui_on_error() # Call helper to reset GUI state
 
 
