@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-DeAuth-Guard Elite – vollständiger, getesteter One-Shot
+DeAuth-Guard Elite – komplett, stabil, mit sofortigem Interface-Up
 sudo python3 deauth_elite.py
 """
-import os, sys, time, threading, subprocess, signal, traceback
+import os, sys, time, threading, subprocess, signal
 from datetime import datetime
 
-# ---------- Scapy ----------
 try:
     from scapy.all import sniff, Dot11Deauth, RadioTap
 except ImportError:
     sys.exit("[!] pip3 install scapy")
 
-# ---------- Tkinter ----------
 try:
     import tkinter as tk
     from tkinter import ttk
@@ -20,7 +18,6 @@ try:
 except ImportError:
     HAS_GUI = False
 
-# ---------- Config ----------
 CFG = {
     "deauth_threshold": 3,
     "history_seconds": 1,
@@ -33,7 +30,7 @@ HISTORY = {}
 MON_IFACE = None
 HONEY_PROC = []
 
-# ---------- Utility ----------
+# ---------- UTILS ----------
 def run(cmd, capture=False):
     if capture:
         return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
@@ -59,7 +56,7 @@ def choose_adapter():
     print("\n[+] Adapter:")
     for idx, iface in enumerate(candidates, 1):
         print(f"  {idx}) {iface}")
-    sel = input("\nWählen [1]: ").strip() or "1"
+    sel = input("Wählen [1]: ").strip() or "1"
     try:
         return candidates[int(sel) - 1]
     except (IndexError, ValueError):
@@ -68,7 +65,8 @@ def choose_adapter():
 def enable_monitor(iface):
     run("airmon-ng check kill")
     run(f"airmon-ng start {iface}")
-    return next((i for i in interfaces() if i.endswith("mon")), None)
+    mon = next((i for i in interfaces() if i.endswith("mon")), None)
+    return mon
 
 def disable_monitor(mon):
     run(f"airmon-ng stop {mon}")
@@ -81,7 +79,7 @@ def log_event(mac, rssi, ch):
     with open(CFG["log_file"], "a") as f:
         f.write(line)
 
-# ---------- Sniffer ----------
+# ---------- SNIFF ----------
 def detect(pkt):
     if not pkt.haslayer(Dot11Deauth):
         return
@@ -103,7 +101,7 @@ def start_sniffer(iface):
     except Exception as e:
         print("[!] Sniffer-Fehler:", e)
 
-# ---------- Honey ----------
+# ---------- HONEY ----------
 def start_honey(iface):
     run(f"ip link set {iface} down")
     run(f"ip link set {iface} up")
@@ -123,10 +121,8 @@ dhcp-range=192.168.66.10,192.168.66.50,255.255.255.0,12h
 """
     open("/tmp/hg_hostapd.conf", "w").write(hostapd_conf)
     open("/tmp/hg_dnsmasq.conf", "w").write(dnsmasq_conf)
-    HONEY_PROC.extend([
-        subprocess.Popen(["hostapd", "-B", "/tmp/hg_hostapd.conf"]),
-        subprocess.Popen(["dnsmasq", "-C", "/tmp/hg_dnsmasq.conf"])
-    ])
+    subprocess.run(["hostapd", "-B", "/tmp/hg_hostapd.conf"], stdout=subprocess.DEVNULL)
+    subprocess.run(["dnsmasq", "-C", "/tmp/hg_dnsmasq.conf"], stdout=subprocess.DEVNULL)
     print(f"[+] Honey-AP '{CFG['honey_ssid']}' läuft auf {iface}")
 
 def stop_honey():
@@ -135,7 +131,7 @@ def stop_honey():
     for p in HONEY_PROC:
         p.terminate()
 
-# ---------- Elite GUI ----------
+# ---------- ELITE GUI ----------
 class EliteGUI:
     def __init__(self, root):
         self.root = root
@@ -143,15 +139,10 @@ class EliteGUI:
         root.configure(bg="black")
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("Treeview",
-                        background="black",
-                        foreground="#00FF00",
-                        fieldbackground="black",
-                        font=("Consolas", 11))
+        style.configure("Treeview", background="black", foreground="#00FF00",
+                        fieldbackground="black", font=("Consolas", 11))
         style.map("Treeview", background=[("selected", "#003300")])
-        style.configure("Treeview.Heading",
-                        background="#111",
-                        foreground="#00FF00",
+        style.configure("Treeview.Heading", background="#111", foreground="#00FF00",
                         font=("Consolas", 11, "bold"))
 
         frm = tk.Frame(root, bg="black")
@@ -189,17 +180,21 @@ class EliteGUI:
 # ---------- MAIN ----------
 def main():
     print(r"""
-   ____          _    ____ _   _ _____ ____  
-  |  _ \  ___   / \  / ___| | | | ____/ ___| 
-  | | | |/ _ \ / _ \| |   | |_| |  _| \___ \ 
+   ____          _    ____ _   _ _____ ____
+  |  _ \  ___   / \  / ___| | | | ____/ ___|
+  | | | |/ _ \ / _ \| |   | |_| |  _| \___ \
   | |_| | (_) / ___ \ |___|  _  | |___ ___) |
-  |____/ \___/_/   \_\____|_| |_|_____|____/  v1.2
+  |____/ \___/_/   \_\____|_| |_|_____|____/  v1.4
           -= Live De-Auth Detector & HoneyPot =-
     """)
     base = choose_adapter()
     MON_IFACE = enable_monitor(base)
     if not MON_IFACE:
         sys.exit("[!] Monitor-Mode Fehler.")
+
+    # Interface hochfahren (Fix "network is down")
+    run(f"ip link set {MON_IFACE} up")
+
     honey = [i for i in interfaces() if i != MON_IFACE and can_monitor(i)]
     CFG["honey_iface"] = honey[0] if honey else None
 
@@ -210,8 +205,8 @@ def main():
         sys.exit(0)
     signal.signal(signal.SIGINT, cleanup)
 
-    root = tk.Tk()
     global GUI
+    root = tk.Tk()
     GUI = EliteGUI(root)
     threading.Thread(target=start_sniffer, args=(MON_IFACE,), daemon=True).start()
     root.mainloop()
