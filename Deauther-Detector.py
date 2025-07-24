@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-DeAuth-Guard Pro
-Author: 0xDeva
-Usage : sudo python3 deauth_pro.py
+DeAuth-Guard Pro – Signal-Stärke im GUI
+sudo python3 deauth_pro.py
 """
-import os, sys, time, threading, subprocess, json, signal
+import os, sys, time, threading, subprocess, signal
 from datetime import datetime
 
 try:
@@ -19,7 +18,6 @@ try:
 except ImportError:
     HAS_GUI = False
 
-# ------------------------ CONFIG ------------------------
 CFG = {
     "deauth_threshold": 3,
     "history_seconds": 1,
@@ -27,27 +25,16 @@ CFG = {
     "honey_channel": 6,
     "log_file": "/tmp/deauth_alerts.log"
 }
-# --------------------------------------------------------
 
 HISTORY = {}
 MON_IFACE = None
 HONEY_PROC = []
+GUI = None
 
-# ---------- UTILS ----------
 def run(cmd, capture=False):
     if capture:
         return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
     subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-def banner():
-    print(r"""
-   ____          _    ____ _   _ _____ ____  
-  |  _ \  ___   / \  / ___| | | | ____/ ___| 
-  | | | |/ _ \ / _ \| |   | |_| |  _| \___ \ 
-  | |_| | (_) / ___ \ |___|  _  | |___ ___) |
-  |____/ \___/_/   \_\____|_| |_|_____|____/  v1.0
-          -= Live De-Auth Detector & HoneyPot =-
-    """)
 
 def interfaces():
     return run("iw dev | awk '/Interface/ {print $2}'", capture=True).split()
@@ -59,43 +46,56 @@ def phy_info(iface):
 def can_monitor(iface):
     return "monitor" in phy_info(iface).lower()
 
+def choose_adapter():
+    candidates = [i for i in interfaces() if can_monitor(i)]
+    if not candidates:
+        sys.exit("[!] Kein Monitor-fähiger WLAN-Adapter gefunden.")
+    env = os.getenv("IFACE")
+    if env and env in candidates:
+        return env
+    print("\n[+] Verfügbare WLAN-Adapter:")
+    for idx, iface in enumerate(candidates, 1):
+        print(f"  {idx}) {iface}")
+    sel = input("\nAdapter wählen [1]: ").strip() or "1"
+    try:
+        return candidates[int(sel) - 1]
+    except (IndexError, ValueError):
+        sys.exit("[!] Ungültige Auswahl.")
+
 def enable_monitor(iface):
     run("airmon-ng check kill")
     run(f"airmon-ng start {iface}")
-    mon = next((i for i in interfaces() if i.endswith("mon")), None)
-    return mon
+    return next((i for i in interfaces() if i.endswith("mon")), None)
 
 def disable_monitor(mon):
     run(f"airmon-ng stop {mon}")
-    run("systemctl start NetworkManager")
+    run("systemctl restart NetworkManager")
 
-def log_event(mac, rssi, channel):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = f"{ts}  {mac}  RSSI:{rssi}dBm  CH:{channel}\n"
+def log_event(mac, rssi, ch):
+    ts = datetime.now().strftime("%H:%M:%S")
+    line = f"{ts}  {mac}  RSSI:{rssi}dBm  CH:{ch}\n"
     print(line.strip())
     with open(CFG["log_file"], "a") as f:
         f.write(line)
 
-# ---------- SNIFF ----------
 def detect(pkt):
     if not pkt.haslayer(Dot11Deauth):
         return
     mac = pkt.addr2
     rssi = pkt[RadioTap].dBm_AntSignal if pkt.haslayer(RadioTap) else "?"
-    channel = pkt[RadioTap].ChannelFrequency if pkt.haslayer(RadioTap) else "?"
+    ch = pkt[RadioTap].ChannelFrequency if pkt.haslayer(RadioTap) else "?"
     now = time.time()
     HISTORY.setdefault(mac, []).append(now)
     HISTORY[mac] = [t for t in HISTORY[mac] if now - t < CFG["history_seconds"]]
     if len(HISTORY[mac]) >= CFG["deauth_threshold"]:
         HISTORY[mac] = []
-        log_event(mac, rssi, channel)
+        log_event(mac, rssi, ch)
         if HAS_GUI and GUI:
-            GUI.add(mac, rssi, channel)
+            GUI.add(mac, rssi, ch)
 
 def start_sniffer(iface):
     sniff(iface=iface, prn=detect, store=False)
 
-# ---------- HONEY-AP ----------
 def start_honey(iface):
     run(f"ip link set {iface} down")
     run(f"ip link set {iface} up")
@@ -107,14 +107,11 @@ ssid={CFG["honey_ssid"]}
 channel={CFG["honey_channel"]}
 driver=nl80211
 hw_mode=g
-ignore_broadcast_ssid=0
-auth_algs=1
 wpa=0
 """
     dnsmasq_conf = f"""
 interface={iface}
 dhcp-range=192.168.66.10,192.168.66.50,255.255.255.0,12h
-address=/#/192.168.66.1
 """
     open("/tmp/hg_hostapd.conf", "w").write(hostapd_conf)
     open("/tmp/hg_dnsmasq.conf", "w").write(dnsmasq_conf)
@@ -130,7 +127,6 @@ def stop_honey():
     for p in HONEY_PROC:
         p.terminate()
 
-# ---------- GUI ----------
 class GUI:
     def __init__(self, root):
         self.root = root
@@ -163,21 +159,24 @@ class GUI:
             self.honey_on = False
             self.lbl.config(text="Honey-AP: Aus")
 
-# ---------- MAIN ----------
 def main():
-    banner()
-    managed = next((i for i in interfaces() if can_monitor(i)), None)
-    if not managed:
-        sys.exit("[!] Kein Monitor-fähiger WLAN-Adapter gefunden.")
-    MON_IFACE = enable_monitor(managed)
-    print(f"[+] Monitor-Interface: {MON_IFACE}")
-
-    # optional Honey-Interface
-    honey_candidates = [i for i in interfaces() if i != MON_IFACE and can_monitor(i)]
-    CFG["honey_iface"] = honey_candidates[0] if honey_candidates else None
+    print(r"""
+   ____          _    ____ _   _ _____ ____  
+  |  _ \  ___   / \  / ___| | | | ____/ ___| 
+  | | | |/ _ \ / _ \| |   | |_| |  _| \___ \ 
+  | |_| | (_) / ___ \ |___|  _  | |___ ___) |
+  |____/ \___/_/   \_\____|_| |_|_____|____/  v1.1
+          -= Live De-Auth Detector & HoneyPot =-
+    """)
+    base = choose_adapter()
+    MON_IFACE = enable_monitor(base)
+    if not MON_IFACE:
+        sys.exit("[!] Monitor-Mode konnte nicht aktiviert werden.")
+    honey = [i for i in interfaces() if i != MON_IFACE and can_monitor(i)]
+    CFG["honey_iface"] = honey[0] if honey else None
 
     def cleanup(sig, frame):
-        print("\n[!] Beende & räume auf…")
+        print("\n[!] Räume auf…")
         stop_honey()
         disable_monitor(MON_IFACE)
         sys.exit(0)
