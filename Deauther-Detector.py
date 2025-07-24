@@ -1,50 +1,67 @@
 #!/usr/bin/env python3
 """
-De-Auth Guard
-Live-De-Auth-Detektor + optionaler Honey-AP (GUI)
-sudo python3 deauth_guard.py
+De-Auth Guard – vollautomatisch
+sudo python3 deauth_guard_auto.py
 """
-
 import os, sys, time, threading, subprocess, json
 from datetime import datetime
 
 try:
     from scapy.all import sniff, Dot11Deauth, RadioTap
 except ImportError:
-    print("Fehler: 'scapy' nicht gefunden.  pip install scapy")
-    sys.exit(1)
+    sys.exit("Fehler: pip install scapy")
 
 try:
     import tkinter as tk
-    from tkinter import ttk, messagebox
+    from tkinter import ttk
 except ImportError:
-    tk = None  # CLI-Modus, falls kein GUI möglich
+    tk = None
 
 # ------------------ CONFIG ------------------
 CFG = {
-    "monitor_iface": "wlan0mon",
-    "honey_iface":   "wlan1",
-    "honey_ssid":    "HoneyWiFi",
-    "honey_channel": 6,
-    "deauth_threshold": 3,       # Frames pro Sekunde
+    "deauth_threshold": 3,
     "history_seconds": 1,
+    "honey_ssid": "HoneyWiFi",
+    "honey_channel": 6,
 }
 # -------------------------------------------
 
-HISTORY = {}          # {mac: [timestamps]}
-HONEY_PROC = []       # laufende Prozesse
+HISTORY = {}
+HONEY_PROC = []
 
-# ---------- Helper ----------
-def run(cmd):
-    subprocess.run(cmd, shell=True, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# ---------- Utility ----------
+def run(cmd, capture=False):
+    if capture:
+        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
+    subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def is_monitor(iface):
-    try:
-        return "type monitor" in os.popen(f"iw dev {iface} info").read()
-    except:
-        return False
+def detect_interfaces():
+    """Gibt Liste aller physischen WLAN-Interfaces zurück."""
+    out = run("iw dev | awk '/Interface/ {print $2}'", capture=True)
+    return out.split()
 
-# ---------- De-Auth Sniffer ----------
+def find_monitor_candidate():
+    """Erstes Interface, das AP/Monitor kann."""
+    for iface in detect_interfaces():
+        info = run(f"iw dev {iface} info", capture=True)
+        if "type managed" in info or "type AP" in info:
+            return iface
+    return None
+
+def enter_monitor_mode(iface):
+    """Erzeugt *mon* Interface und gibt Namen zurück."""
+    run(f"airmon-ng check kill")
+    run(f"airmon-ng start {iface}")
+    mon = f"{iface}mon"
+    if mon in detect_interfaces():
+        return mon
+    # fallback falls airmon-ng einfach wlan0mon erzeugt
+    for cand in detect_interfaces():
+        if cand.endswith("mon"):
+            return cand
+    return None
+
+# ---------- Sniffer ----------
 def detect(pkt):
     if not pkt.haslayer(Dot11Deauth):
         return
@@ -55,72 +72,59 @@ def detect(pkt):
     HISTORY[mac] = [t for t in HISTORY[mac] if now - t < CFG["history_seconds"]]
     if len(HISTORY[mac]) >= CFG["deauth_threshold"]:
         HISTORY[mac] = []
-        log_event(mac, rssi)
+        log(mac, rssi)
         if GUI:
             GUI.add_alert(mac, rssi)
 
-def log_event(mac, rssi):
+def log(mac, rssi):
     ts = datetime.now().strftime("%H:%M:%S")
-    print(f"[ALERT] {ts}  {mac}  RSSI {rssi} dBm")
+    print(f"[ALERT] {ts}  {mac}  RSSI {rssi}")
     with open("deauth_log.txt", "a") as f:
         f.write(f"{ts} {mac} {rssi}\n")
 
-def start_sniff():
-    if not is_monitor(CFG["monitor_iface"]):
-        print("Interface nicht im Monitor-Modus – versuche airmon-ng start")
-        run(f"airmon-ng start {CFG['monitor_iface'].replace('mon','')}")
-        if not is_monitor(CFG["monitor_iface"]):
-            print("Abbruch: Monitor-Mode nicht verfügbar")
-            sys.exit(1)
-    print(f"[INFO] Sniffing auf {CFG['monitor_iface']} …")
-    sniff(iface=CFG["monitor_iface"], prn=detect, store=False)
+def start_sniff(mon):
+    print(f"[INFO] Starte Sniffer auf {mon}")
+    sniff(iface=mon, prn=detect, store=False)
 
 # ---------- Honey-AP ----------
-def start_honey():
-    iface = CFG["honey_iface"]
+def start_honey(iface):
     run(f"ip link set {iface} down")
     run(f"ip link set {iface} up")
     run(f"ip addr flush dev {iface}")
     run(f"ip addr add 192.168.66.1/24 dev {iface}")
 
-    # hostapd
-    hconf = f"""
+    hostapd_conf = f"""
 interface={iface}
 ssid={CFG["honey_ssid"]}
 channel={CFG["honey_channel"]}
 driver=nl80211
 hw_mode=g
-ignore_broadcast_ssid=0
-auth_algs=1
 wpa=0
 """
-    with open("/tmp/hostapd.conf", "w") as f:
-        f.write(hconf)
-    HONEY_PROC.append(subprocess.Popen(["hostapd", "-B", "/tmp/hostapd.conf"]))
-
-    # dnsmasq
-    dconf = f"""
+    dnsmasq_conf = f"""
 interface={iface}
 dhcp-range=192.168.66.10,192.168.66.50,255.255.255.0,12h
-address=/#/192.168.66.1
 """
-    with open("/tmp/dnsmasq.conf", "w") as f:
-        f.write(dconf)
-    HONEY_PROC.append(subprocess.Popen(["dnsmasq", "-C", "/tmp/dnsmasq.conf"]))
-    print("[INFO] Honey-AP läuft – SSID:", CFG["honey_ssid"])
+    open("/tmp/hostapd.conf", "w").write(hostapd_conf)
+    open("/tmp/dnsmasq.conf", "w").write(dnsmasq_conf)
+
+    HONEY_PROC.extend([
+        subprocess.Popen(["hostapd", "-B", "/tmp/hostapd.conf"]),
+        subprocess.Popen(["dnsmasq", "-C", "/tmp/dnsmasq.conf"])
+    ])
+    print(f"[INFO] Honey-AP läuft – SSID: {CFG['honey_ssid']}")
 
 def stop_honey():
-    for p in HONEY_PROC:
-        p.terminate()
     run("pkill -f hostapd")
     run("pkill -f dnsmasq")
-    print("[INFO] Honey-AP gestoppt")
+    for p in HONEY_PROC:
+        p.terminate()
 
 # ---------- GUI ----------
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("De-Auth Guard")
+        root.title("De-Auth Guard – auto")
         frm = ttk.Frame(root, padding=10)
         frm.pack(fill="both", expand=True)
 
@@ -129,44 +133,53 @@ class App:
             self.tree.heading(col, text=col)
         self.tree.pack(fill="both", expand=True)
 
-        btn = ttk.Button(frm, text="Honey-AP start/stop", command=self.toggle_honey)
-        btn.pack(pady=5)
-        self.honey_on = False
-        self.label = ttk.Label(frm, text="Honey-AP: Aus")
-        self.label.pack()
+        ttk.Button(frm, text="Honey-AP starten", command=self.toggle_honey).pack(pady=5)
+        self.lbl = ttk.Label(frm, text="Honey-AP: Aus")
+        self.lbl.pack()
 
     def add_alert(self, mac, rssi):
         ts = datetime.now().strftime("%H:%M:%S")
         self.tree.insert("", "end", values=(ts, mac, str(rssi)))
 
     def toggle_honey(self):
-        if not self.honey_on:
-            start_honey()
+        if not hasattr(self, "honey_on") or not self.honey_on:
+            start_honey(CFG["honey_iface"])
             self.honey_on = True
-            self.label.config(text="Honey-AP: An")
+            self.lbl.config(text="Honey-AP: An")
         else:
             stop_honey()
             self.honey_on = False
-            self.label.config(text="Honey-AP: Aus")
+            self.lbl.config(text="Honey-AP: Aus")
 
 # ---------- Main ----------
 def main():
-    if not is_monitor(CFG["monitor_iface"]):
-        print("Monitor-Interface nicht gefunden – bitte anpassen in CFG")
-        sys.exit(1)
+    # 1. Monitor-Interface automatisch erzeugen
+    base = find_monitor_candidate()
+    if not base:
+        sys.exit("Kein WLAN-Interface gefunden.")
+    mon = enter_monitor_mode(base)
+    if not mon:
+        sys.exit("Monitor-Mode konnte nicht aktiviert werden.")
+    CFG["monitor_iface"] = mon
 
+    # 2. Zweites Interface als Honey-AP (falls vorhanden)
+    ifaces = detect_interfaces()
+    honey_candidates = [i for i in ifaces if i != mon and not i.endswith("mon")]
+    CFG["honey_iface"] = honey_candidates[0] if honey_candidates else None
+
+    # 3. GUI oder CLI starten
     global GUI
     if tk:
         root = tk.Tk()
         GUI = App(root)
-        threading.Thread(target=start_sniff, daemon=True).start()
+        threading.Thread(target=start_sniff, args=(mon,), daemon=True).start()
         try:
             root.mainloop()
         finally:
             stop_honey()
     else:
-        print("Kein Tkinter – starte CLI-Modus")
-        start_sniff()
+        print("Kein Tkinter – CLI-Modus")
+        start_sniff(mon)
 
 if __name__ == "__main__":
     main()
