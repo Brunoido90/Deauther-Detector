@@ -5,20 +5,23 @@ import time
 import queue
 import random
 from datetime import datetime, timedelta
+import subprocess # Für die Ausführung von Shell-Befehlen
 
 # --- WICHTIGE VORAUSSETZUNGEN FÜR ECHTE FUNKTIONALITÄT ---
 # 1. Scapy installieren: pip install scapy
 # 2. WLAN-Adapter in den Monitor-Modus versetzen (Betriebssystemabhängig!)
-#    - Linux Beispiel: sudo airmon-ng start wlan0; sudo ifconfig wlan0mon up
+#    - Linux: Installation von 'aircrack-ng' (beinhaltet airmon-ng) ist SEHR EMPFOHLEN: sudo apt install aircrack-ng
+#      Das Skript versucht, airmon-ng zu verwenden, um den Monitor-Modus automatisch zu aktivieren.
 #    - Windows: Installieren Sie Npcap mit aktivierter Option "Support raw 802.11 traffic (and monitor mode) for wireless adapters".
 #               Nicht alle WLAN-Adapter unterstützen den Monitor-Modus unter Windows.
-#               Möglicherweise müssen Sie den Adapter manuell in den Monitor-Modus versetzen, falls dies nicht automatisch geschieht.
+#               Die automatische Umschaltung ist unter Windows sehr schwierig und wird hier nicht direkt unterstützt.
+#               Sie müssen den Adapter manuell in den Monitor-Modus versetzen, falls dies unter Windows möglich ist.
 # 3. Skript mit Administrator-/Root-Rechten ausführen (z.B. sudo python IhrSkriptname.py unter Linux/macOS,
 #    als Administrator unter Windows).
 # -----------------------------------------------------------
 
 try:
-    from scapy.all import Dot11, Dot11Deauth, sniff, RadioTap # Import Scapy für echte Paketanalyse
+    from scapy.all import Dot11, Dot11Deauth, sniff, RadioTap, get_if_list # get_if_list für Schnittstellen-Scan
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
@@ -57,6 +60,8 @@ class DeauthDetectorGUI:
         self.running = True # Flag für das sichere Beenden des Threads
         self.sniff_thread = None # Referenz auf den Sniffing-Thread
         self.deauth_timestamps = [] # Speichert Zeitstempel von Deauth-Paketen für die Fensterlogik
+        self.original_interface = None # Speichert den Namen der ursprünglichen Schnittstelle
+        self.monitor_interface = None # Speichert den Namen der Monitor-Schnittstelle
 
         # --- Styles ---
         self.setup_styles()
@@ -110,14 +115,21 @@ class DeauthDetectorGUI:
         self.start_btn.pack(pady=5)
 
     def setup_interface_frame(self):
-        self.interface_label = ttk.Label(self.interface_frame, text="Schnittstelle (z.B. wlan0mon, Wi-Fi):")
+        self.interface_label = ttk.Label(self.interface_frame, text="Wähle Schnittstelle:")
         self.interface_label.pack(side=tk.LEFT, padx=(0, 5))
-        self.interface_entry = ttk.Entry(self.interface_frame, width=30)
-        self.interface_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        # Standardwert für Linux/Windows, anpassen bei Bedarf
-        self.interface_entry.insert(0, "wlan0mon" if SCAPY_AVAILABLE else "simuliert") 
+        
+        self.interface_combobox = ttk.Combobox(self.interface_frame, width=30, state="readonly")
+        self.interface_combobox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        
+        self.scan_btn = ttk.Button(self.interface_frame, text="Schnittstellen scannen", command=self.scan_interfaces)
+        self.scan_btn.pack(side=tk.LEFT)
+
         if not SCAPY_AVAILABLE:
-            self.interface_entry.config(state="disabled") # Deaktivieren, wenn Scapy nicht da ist
+            self.interface_combobox.config(state="disabled")
+            self.scan_btn.config(state="disabled")
+            self.interface_combobox.set("Scapy nicht verfügbar (Simulation)")
+        else:
+            self.scan_interfaces() # Schnittstellen beim Start scannen
 
     def setup_alert_frame(self):
         self.alert_label = ttk.Label(self.alert_frame, text="KEIN ANGRIFF AKTIV", style="Normal.TLabel")
@@ -148,36 +160,144 @@ class DeauthDetectorGUI:
         self.log_text.tag_configure("info", foreground="blue")
         self.log_text.tag_configure("normal", foreground="black")
 
+    def scan_interfaces(self):
+        if not SCAPY_AVAILABLE:
+            messagebox.showerror("Fehler", "Scapy ist nicht installiert.")
+            return
+
+        try:
+            # Scapy's get_if_list() gibt eine Liste der Schnittstellennamen zurück
+            interfaces = get_if_list()
+            # Filtern, um nur WLAN-Schnittstellen anzuzeigen, wenn möglich (heuristisch)
+            wifi_interfaces = [
+                iface for iface in interfaces 
+                if "wlan" in iface or "mon" in iface or "Wi-Fi" in iface or "Wireless" in iface
+            ]
+            if not wifi_interfaces:
+                messagebox.showwarning("Keine WLAN-Schnittstellen gefunden", 
+                                       "Es wurden keine offensichtlichen WLAN-Schnittstellen gefunden. "
+                                       "Stellen Sie sicher, dass Ihr Adapter angeschlossen und die Treiber installiert sind.")
+                self.interface_combobox['values'] = []
+                self.interface_combobox.set("")
+                return
+
+            self.interface_combobox['values'] = wifi_interfaces
+            if wifi_interfaces:
+                self.interface_combobox.set(wifi_interfaces[0]) # Ersten als Standard auswählen
+            self.add_log_entry(f"Gefundene Schnittstellen: {', '.join(wifi_interfaces)}", "info")
+
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Fehler beim Scannen der Schnittstellen: {str(e)}\n"
+                                           "Stellen Sie sicher, dass Sie das Skript mit Administrator-/Root-Rechten ausführen.")
+            self.interface_combobox['values'] = []
+            self.interface_combobox.set("")
+
     def toggle_monitoring(self):
         if not SCAPY_AVAILABLE:
             messagebox.showerror("Fehler", "Scapy ist nicht installiert. Der Detektor kann nur simulieren.")
             return
 
-        self.detection_active = not self.detection_active
-        status = "AKTIV" if self.detection_active else "Inaktiv"
-        self.status_label.config(text=f"Detektor: {status}")
-        self.start_btn.config(text="Stop Monitoring" if self.detection_active else "Start Monitoring")
-
-        if self.detection_active:
-            interface = self.interface_entry.get().strip()
-            if not interface:
-                messagebox.showerror("Fehler", "Bitte geben Sie eine Netzwerkschnittstelle ein.")
-                self.detection_active = False
-                self.status_label.config(text="Detektor: Inaktiv")
-                self.start_btn.config(text="Start Monitoring")
+        if not self.detection_active: # Start Monitoring
+            selected_interface = self.interface_combobox.get().strip()
+            if not selected_interface:
+                messagebox.showerror("Fehler", "Bitte wählen Sie eine Netzwerkschnittstelle aus.")
                 return
 
-            self.deauth_timestamps = [] # Zurücksetzen bei Start
-            self.sniff_thread = threading.Thread(target=self.start_sniffing, args=(interface,))
-            self.sniff_thread.daemon = True
-            self.sniff_thread.start()
-            self.add_log_entry(f"Starte Überwachung auf Schnittstelle: {interface}...", "info")
-        else:
+            self.original_interface = selected_interface # Speichern für spätere Rücksetzung
+            self.add_log_entry(f"Versuche, Schnittstelle {self.original_interface} in den Monitor-Modus zu versetzen...", "info")
+            
+            # Versuche, den Monitor-Modus zu aktivieren (Linux-spezifisch mit airmon-ng)
+            try:
+                # airmon-ng check kill beendet störende Prozesse
+                subprocess.run(["airmon-ng", "check", "kill"], check=True, capture_output=True, text=True)
+                self.add_log_entry("Störende Prozesse beendet.", "info")
+
+                # airmon-ng start versetzt die Schnittstelle in den Monitor-Modus
+                result = subprocess.run(["airmon-ng", "start", self.original_interface], check=True, capture_output=True, text=True)
+                output_lines = result.stdout.splitlines()
+                
+                # Versuche, den Namen der neuen Monitor-Schnittstelle zu finden
+                self.monitor_interface = None
+                for line in output_lines:
+                    if "monitor mode enabled on" in line:
+                        # Beispiel: (monitor mode enabled on wlan0mon)
+                        parts = line.split()
+                        if len(parts) > 4 and parts[3] == "on":
+                            self.monitor_interface = parts[4].strip(')')
+                            break
+                    elif "Monitor mode enabled for" in line:
+                        # Beispiel: Monitor mode enabled for wlan0mon
+                        parts = line.split()
+                        if len(parts) > 3 and parts[3] == "for":
+                            self.monitor_interface = parts[4].strip()
+                            break
+                
+                if not self.monitor_interface:
+                    # Fallback, falls airmon-ng den Namen nicht klar ausgibt, 
+                    # oder wenn die Schnittstelle bereits im Monitor-Modus war und der Name gleich blieb.
+                    # Dies ist eine Heuristik und kann fehlschlagen.
+                    if "mon" in self.original_interface:
+                        self.monitor_interface = self.original_interface
+                    else:
+                        # Versuch, den Namen mit 'mon' anzuhängen
+                        self.monitor_interface = self.original_interface + "mon" 
+                    self.add_log_entry(f"Konnte Monitor-Schnittstelle nicht eindeutig aus airmon-ng Output extrahieren. Versuche: {self.monitor_interface}", "warning")
+
+                self.add_log_entry(f"Schnittstelle {self.original_interface} erfolgreich in Monitor-Modus versetzt. Neue Schnittstelle: {self.monitor_interface}", "info")
+                
+                # Aktualisiere die GUI, um die Monitor-Schnittstelle anzuzeigen
+                self.interface_combobox.set(self.monitor_interface)
+                self.interface_combobox.config(state="disabled") # Deaktivieren während der Überwachung
+                self.scan_btn.config(state="disabled")
+
+                self.detection_active = True
+                self.status_label.config(text=f"Detektor: AKTIV (Schnittstelle: {self.monitor_interface})")
+                self.start_btn.config(text="Stop Monitoring")
+                self.deauth_timestamps = [] # Zurücksetzen bei Start
+                self.sniff_thread = threading.Thread(target=self.start_sniffing, args=(self.monitor_interface,))
+                self.sniff_thread.daemon = True
+                self.sniff_thread.start()
+
+            except FileNotFoundError:
+                messagebox.showerror("Fehler", "airmon-ng nicht gefunden. Bitte installieren Sie aircrack-ng (sudo apt install aircrack-ng).")
+                self.add_log_entry("Fehler: airmon-ng nicht gefunden.", "critical")
+            except subprocess.CalledProcessError as e:
+                messagebox.showerror("Fehler", f"Fehler beim Ausführen von airmon-ng: {e.stderr}\n"
+                                               "Stellen Sie sicher, dass Sie das Skript mit Administrator-/Root-Rechten ausführen.")
+                self.add_log_entry(f"Fehler bei airmon-ng: {e.stderr}", "critical")
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Ein unerwarteter Fehler ist aufgetreten: {str(e)}")
+                self.add_log_entry(f"Unerwarteter Fehler: {str(e)}", "critical")
+            
+        else: # Stop Monitoring
+            self.detection_active = False
+            self.status_label.config(text="Detektor: Inaktiv")
+            self.start_btn.config(text="Start Monitoring")
+            self.interface_combobox.config(state="readonly") # Wieder aktivieren
+            self.scan_btn.config(state="normal")
+            
+            self.add_log_entry("Beende Überwachung...", "info")
             if self.sniff_thread and self.sniff_thread.is_alive():
-                # Sniff-Thread wird durch `stop_filter` in sniff_packets beendet
-                self.add_log_entry("Beende Überwachung...", "info")
-            else:
-                self.add_log_entry("Überwachung gestoppt.", "info")
+                # Der sniff_thread wird durch `stop_filter` beendet
+                pass 
+            
+            # Versuche, den Monitor-Modus zu deaktivieren (Linux-spezifisch)
+            if self.monitor_interface and self.original_interface:
+                try:
+                    self.add_log_entry(f"Setze Schnittstelle {self.original_interface} zurück in den Managed-Modus...", "info")
+                    subprocess.run(["airmon-ng", "stop", self.monitor_interface], check=True, capture_output=True, text=True)
+                    # NetworkManager neu starten, um die Konnektivität wiederherzustellen
+                    subprocess.run(["systemctl", "start", "NetworkManager"], check=False, capture_output=True, text=True)
+                    self.add_log_entry(f"Schnittstelle {self.original_interface} erfolgreich zurückgesetzt. NetworkManager neu gestartet.", "info")
+                    self.monitor_interface = None
+                    self.original_interface = None
+                    self.scan_interfaces() # Schnittstellenliste aktualisieren
+                except FileNotFoundError:
+                    self.add_log_entry("airmon-ng nicht gefunden, konnte Monitor-Modus nicht deaktivieren.", "warning")
+                except subprocess.CalledProcessError as e:
+                    self.add_log_entry(f"Fehler beim Deaktivieren des Monitor-Modus: {e.stderr}", "warning")
+                except Exception as e:
+                    self.add_log_entry(f"Unerwarteter Fehler beim Zurücksetzen des Monitor-Modus: {str(e)}", "warning")
 
 
     def toggle_honeypot(self):
@@ -198,12 +318,16 @@ class DeauthDetectorGUI:
             self.detection_active = False
             self.master.after(0, lambda: self.status_label.config(text="Detektor: Inaktiv"))
             self.master.after(0, lambda: self.start_btn.config(text="Start Monitoring"))
+            self.master.after(0, lambda: self.interface_combobox.config(state="readonly"))
+            self.master.after(0, lambda: self.scan_btn.config(state="normal"))
         except Exception as e:
             messagebox.showerror("Fehler", f"Fehler beim Sniffing auf {interface}: {str(e)}")
             self.data_queue.put({"type": "error", "message": f"Sniffing-Fehler: {str(e)}"})
             self.detection_active = False
             self.master.after(0, lambda: self.status_label.config(text="Detektor: Inaktiv"))
             self.master.after(0, lambda: self.start_btn.config(text="Start Monitoring"))
+            self.master.after(0, lambda: self.interface_combobox.config(state="readonly"))
+            self.master.after(0, lambda: self.scan_btn.config(state="normal"))
 
 
     def packet_callback(self, packet):
@@ -341,10 +465,25 @@ class DeauthDetectorGUI:
         """Wird aufgerufen, wenn das Fenster geschlossen wird, um Threads sicher zu beenden."""
         self.running = False # Setzt das Flag, um den GUI-Update-Loop zu beenden
         self.detection_active = False # Stoppt den Sniffing-Thread
+        
+        # Versuche, den Monitor-Modus zu deaktivieren, wenn er aktiv war
+        if self.monitor_interface and self.original_interface:
+            try:
+                self.add_log_entry(f"Setze Schnittstelle {self.original_interface} zurück in den Managed-Modus...", "info")
+                subprocess.run(["airmon-ng", "stop", self.monitor_interface], check=True, capture_output=True, text=True)
+                # NetworkManager neu starten, um die Konnektivität wiederherzustellen
+                subprocess.run(["systemctl", "start", "NetworkManager"], check=False, capture_output=True, text=True)
+                self.add_log_entry(f"Schnittstelle {self.original_interface} erfolgreich zurückgesetzt. NetworkManager neu gestartet.", "info")
+            except FileNotFoundError:
+                self.add_log_entry("airmon-ng nicht gefunden, konnte Monitor-Modus nicht deaktivieren beim Schließen.", "warning")
+            except subprocess.CalledProcessError as e:
+                self.add_log_entry(f"Fehler beim Deaktivieren des Monitor-Modus beim Schließen: {e.stderr}", "warning")
+            except Exception as e:
+                self.add_log_entry(f"Unerwarteter Fehler beim Zurücksetzen des Monitor-Modus beim Schließen: {str(e)}", "warning")
+
         if self.sniff_thread and self.sniff_thread.is_alive():
             # Geben Sie dem Sniffing-Thread etwas Zeit zum Beenden
             # Da stop_filter verwendet wird, sollte er sich bald beenden.
-            # Ein join() hier könnte die GUI blockieren, wenn der Thread nicht schnell genug reagiert.
             pass 
         self.master.destroy() # Schließt das Tkinter-Fenster
 
