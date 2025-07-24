@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# deauth_pro_full.py – Deauth-Detector + Wi-Fi-Adapter-Scan + Live-RSSI
+# deauth_pro_fixed.py – vollautomatischer Deauth-Detector mit robuster Interface-Erkennung
+# Scannt alle WLAN-Adapter → Dropdown → Monitor-Mode → Live-RSSI → Export
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -10,48 +11,46 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from scapy.all import sniff, Dot11Deauth, Dot11ProbeReq
 
-# -------------------------------------------------
-# Interface-Scan
-# -------------------------------------------------
-def scan_adapters():
-    """Gibt Liste mit (Name, Mac, Driver) zurück"""
-    adapters = []
+# ---------- Robustes Interface-Handling ----------
+def run(cmd):
     try:
-        out = subprocess.check_output(["iw", "dev"], text=True)
-        for line in out.splitlines():
-            m = re.search(r"Interface\s+(\S+)", line)
-            if m:
-                name = m.group(1)
-                # MAC & Driver
-                try:
-                    mac = subprocess.check_output(["cat", f"/sys/class/net/{name}/address"], text=True).strip()
-                except:
-                    mac = "unknown"
-                try:
-                    driver = subprocess.check_output(["readlink", f"/sys/class/net/{name}/device/driver"], text=True).strip().split("/")[-1]
-                except:
-                    driver = "unknown"
-                adapters.append((name, mac, driver))
+        return subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True).strip()
     except:
-        pass
+        return ""
+
+def scan_adapters():
+    """Gibt Liste mit (Name, Mac, Treiber) zurück"""
+    adapters = []
+    iw_out = run(["iw", "dev"])
+    for line in iw_out.splitlines():
+        m = re.search(r"Interface\s+(\S+)", line)
+        if m:
+            name = m.group(1)
+            mac = run(["cat", f"/sys/class/net/{name}/address"])
+            driver = run(["readlink", f"/sys/class/net/{name}/device/driver"]).split("/")[-1]
+            adapters.append((name, mac or "n/a", driver or "n/a"))
     return adapters
 
+def kill_processes():
+    """airmon-ng check kill light-weight"""
+    for proc in ["wpa_supplicant", "NetworkManager"]:
+        subprocess.run(["pkill", proc], check=False)
+
+def set_monitor(iface):
+    """Stellt Monitor-Mode sicher"""
+    kill_processes()
+    run(["ip", "link", "set", iface, "down"])
+    run(["iw", iface, "set", "type", "monitor"])
+    run(["ip", "link", "set", iface, "up"])
+    return iface
+
+# ---------- Adapter-Scan ----------
 ADAPTERS = scan_adapters()
 if not ADAPTERS:
-    messagebox.showerror("Adapter", "Keine WLAN-Adapter gefunden!")
+    messagebox.showerror("Adapter", "Kein WLAN-Adapter gefunden!")
     sys.exit(1)
 
-# -------------------------------------------------
-# Monitor-Mode
-# -------------------------------------------------
-def set_monitor(iface):
-    subprocess.run(["ip", "link", "set", iface, "down"], check=False)
-    subprocess.run(["iw", iface, "set", "monitor", "none"], check=False)
-    subprocess.run(["ip", "link", "set", iface, "up"], check=False)
-
-# -------------------------------------------------
-# Model
-# -------------------------------------------------
+# ---------- Model ----------
 gui_queue = queue.Queue()
 class EventModel:
     def __init__(self):
@@ -66,20 +65,18 @@ class EventModel:
                 self.deauth_counter[sender] = self.deauth_counter.get(sender, 0) + 1
 model = EventModel()
 
-# -------------------------------------------------
-# Sniffer
-# -------------------------------------------------
+# ---------- Sniffer ----------
 IFACE_MON = None
 def sniff_worker():
-    def handler(p):
-        if p.haslayer(Dot11Deauth):
-            sender = p.addr2 or "N/A"
-            target = p.addr1 or "N/A"
-            rssi = p.dBm_AntSignal if hasattr(p, 'dBm_AntSignal') else "N/A"
+    def handler(pkt):
+        if pkt.haslayer(Dot11Deauth):
+            sender = pkt.addr2 or "N/A"
+            target = pkt.addr1 or "N/A"
+            rssi = pkt.dBm_AntSignal if hasattr(pkt, 'dBm_AntSignal') else "N/A"
             model.add("Deauth", sender, target, rssi)
             gui_queue.put(("update",))
-        if p.haslayer(Dot11ProbeReq):
-            sender = p.addr2
+        if pkt.haslayer(Dot11ProbeReq):
+            sender = pkt.addr2
             if sender and sender != "aa:bb:cc:dd:ee:ff":
                 with model.lock:
                     if not any(e["sender"] == sender and e["typ"] == "Probe-Req" for e in model.events[-50:]):
@@ -87,9 +84,7 @@ def sniff_worker():
                         gui_queue.put(("update",))
     sniff(iface=IFACE_MON, prn=handler, store=0)
 
-# -------------------------------------------------
-# Themes
-# -------------------------------------------------
+# ---------- Themes ----------
 THEMES = {
     "Dark":  {"bg":"#1e1e1e","fg":"#ffffff","accent":"#0078d4","sel":"#ff5252"},
     "Light": {"bg":"#ffffff","fg":"#000000","accent":"#0078d4","sel":"#ff5252"}
@@ -100,7 +95,7 @@ class ThemeEngine:
     def apply(self, tree, fig, ax):
         style = ttk.Style()
         style.theme_use("clam")
-        bg, fg, acc, sel = self.colors["bg"], self.colors["fg"], self.colors["accent"], self.colors["sel"]
+        bg, fg, acc = self.colors["bg"], self.colors["fg"], self.colors["accent"]
         self.root.configure(bg=bg)
         style.configure("Treeview", background=bg, foreground=fg, fieldbackground=bg, rowheight=24)
         style.map("Treeview", background=[("selected", acc)])
@@ -111,22 +106,19 @@ class ThemeEngine:
         ax.tick_params(colors=fg)
         ax.title.set_color(fg)
 
-# -------------------------------------------------
-# GUI
-# -------------------------------------------------
+# ---------- GUI ----------
 class DeauthApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Deauth Pro Detector")
         self.root.geometry("1500x900")
         self.theme = ThemeEngine(root,"Dark")
-        self.build_menu()
-        self.build_adapter_frame()
-        self.build_main()
+        self.build_ui()
         self.theme.apply(self.tree, self.fig, self.ax)
-        self.root.after(200,self.process_queue)
-    # ---------- Menü ----------
-    def build_menu(self):
+        self.root.after(200, self.process_queue)
+
+    def build_ui(self):
+        # Menü
         menubar = tk.Menu(self.root)
         filem = tk.Menu(menubar,tearoff=0)
         filem.add_command(label="Export JSON", command=self.export_json)
@@ -135,28 +127,29 @@ class DeauthApp:
         filem.add_command(label="Exit", command=self.root.quit)
         menubar.add_cascade(label="File", menu=filem)
         helpm = tk.Menu(menubar,tearoff=0)
-        helpm.add_command(label="About", command=lambda: messagebox.showinfo("About","Deauth Pro v3.0"))
+        helpm.add_command(label="About", command=lambda: messagebox.showinfo("About","Deauth Pro v3.2"))
         menubar.add_cascade(label="Help", menu=helpm)
         self.root.config(menu=menubar)
-    # ---------- Adapter-Wähler ----------
-    def build_adapter_frame(self):
+
+        # Adapter-Auswahl
         af = ttk.LabelFrame(self.root, text="WLAN-Adapter")
         af.pack(fill=tk.X, padx=10, pady=5)
         ttk.Label(af, text="Adapter wählen:").pack(side=tk.LEFT, padx=5)
-        self.adapter_combo = ttk.Combobox(af, state="readonly", width=25)
+        self.adapter_combo = ttk.Combobox(af, state="readonly", width=40)
         self.adapter_combo["values"] = [f"{n}  ({m}) – {d}" for n,m,d in ADAPTERS]
         self.adapter_combo.current(0)
         self.adapter_combo.pack(side=tk.LEFT, padx=5)
         ttk.Button(af, text="Start Scan", command=self.start_scan).pack(side=tk.LEFT, padx=5)
-    # ---------- Main ----------
-    def build_main(self):
+
+        # Main
         nb = ttk.Notebook(self.root)
         nb.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         self.main_frame = ttk.Frame(nb)
         nb.add(self.main_frame, text="Dashboard")
         paned = ttk.PanedWindow(self.main_frame, orient=tk.VERTICAL)
         paned.pack(fill=tk.BOTH, expand=True)
-        # Oben: Tree
+
+        # Treeview
         tree_frame = ttk.Frame(paned)
         paned.add(tree_frame, weight=3)
         cols = ("Time", "Type", "Sender MAC", "Target MAC", "RSSI (dBm)")
@@ -169,13 +162,15 @@ class DeauthApp:
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        # Unten: Chart
+
+        # Chart
         chart_frame = ttk.Frame(paned)
         paned.add(chart_frame, weight=2)
         self.fig = Figure(figsize=(10,4), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, chart_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
     # ---------- Queue ----------
     def process_queue(self):
         try:
@@ -186,7 +181,7 @@ class DeauthApp:
         except queue.Empty:
             pass
         self.root.after(250, self.process_queue)
-    # ---------- Refresh ----------
+
     def refresh(self):
         for child in self.tree.get_children():
             self.tree.delete(child)
@@ -212,7 +207,7 @@ class DeauthApp:
             self.ax.set_title("Live Deauth-Rate pro MAC (letzte 60 Sek.)", color=self.theme.colors["fg"])
             self.fig.tight_layout()
             self.canvas.draw()
-    # ---------- Start ----------
+
     def start_scan(self):
         idx = self.adapter_combo.current()
         if idx < 0:
@@ -220,15 +215,18 @@ class DeauthApp:
             return
         iface = ADAPTERS[idx][0]
         set_monitor(iface)
+        global IFACE_MON
+        IFACE_MON = iface
         self.root.title(f"Deauth Pro – {iface}")
         threading.Thread(target=sniff_worker, daemon=True).start()
-    # ---------- Export ----------
+
     def export_json(self):
         path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON","*.json")])
         if path:
             with open(path,"w") as f:
                 with model.lock:
                     json.dump([{**e,"ts":str(e["ts"])} for e in model.events],f,indent=2)
+
     def export_csv(self):
         path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV","*.csv")])
         if path:
@@ -238,10 +236,12 @@ class DeauthApp:
                 with model.lock:
                     for e in model.events:
                         writer.writerow([e["ts"],e["typ"],e["sender"],e["target"],e["rssi"]])
+
     def clear(self):
         with model.lock:
             model.events.clear(); model.deauth_counter.clear()
         self.refresh()
+
     def on_close(self):
         self.root.quit()
 
