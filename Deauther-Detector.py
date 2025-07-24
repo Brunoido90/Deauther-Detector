@@ -275,6 +275,8 @@ class DeauthDetectorGUI:
                     self.add_log_entry(f"Could not clearly extract monitor interface from airmon-ng output. Trying: {self.monitor_interface}", "warning")
 
                 # --- NEW CHECK: Verify if the monitor interface is found by Scapy ---
+                # Add a small delay to give the system time to register the new interface
+                time.sleep(1) 
                 if self.monitor_interface not in get_if_list():
                     error_msg = f"Monitor interface '{self.monitor_interface}' not found by Scapy after airmon-ng. " \
                                 "This might indicate a driver issue, a problem with airmon-ng, or incorrect privileges. " \
@@ -454,6 +456,10 @@ class DeauthDetectorGUI:
         elif data["type"] == "error":
             messagebox.showerror("Error", data["message"])
             self.add_log_entry(f"ERROR: {data['message']}", "critical")
+            # If the error is critical and prevents sniffing, reset GUI state
+            # This ensures buttons are re-enabled etc.
+            if "sniffing" in data["message"].lower() or "permission" in data["message"].lower() or "not found by scapy" in data["message"].lower() or "unexpected output from airmon-ng" in data["message"].lower():
+                self.master.after(0, self._reset_gui_on_error) # Schedule reset on main thread
 
     def process_deauth_packet(self, data):
         # RSSI Display
