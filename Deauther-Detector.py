@@ -332,21 +332,40 @@ class DeauthDetectorGUI:
             # Attempt to deactivate monitor mode (Linux-specific)
             if self.monitor_interface and self.original_interface:
                 try:
-                    self.add_log_entry(f"Setting interface {self.original_interface} back to managed mode...", "info")
-                    subprocess.run(["airmon-ng", "stop", self.monitor_interface], check=True, capture_output=True, text=True)
+                    self.add_log_entry(f"Attempting to stop monitor mode on {self.monitor_interface} with 'airmon-ng stop'...", "info")
+                    stop_monitor_result = subprocess.run(["airmon-ng", "stop", self.monitor_interface], check=True, capture_output=True, text=True)
+                    self.add_log_entry(f"airmon-ng stop stdout: {stop_monitor_result.stdout.strip()}", "info")
+                    if stop_monitor_result.stderr:
+                        self.add_log_entry(f"airmon-ng stop stderr: {stop_monitor_result.stderr.strip()}", "warning")
+                    
+                    # Explicitly set original interface back to managed mode
+                    self.add_log_entry(f"Setting interface {self.original_interface} to managed mode...", "info")
+                    subprocess.run(["sudo", "ip", "link", "set", self.original_interface, "down"], check=True, capture_output=True, text=True)
+                    subprocess.run(["sudo", "iwconfig", self.original_interface, "mode", "managed"], check=True, capture_output=True, text=True)
+                    subprocess.run(["sudo", "ip", "link", "set", self.original_interface, "up"], check=True, capture_output=True, text=True)
+                    self.add_log_entry(f"Interface {self.original_interface} successfully set to managed mode.", "info")
+
                     # Restart NetworkManager to restore connectivity
-                    subprocess.run(["systemctl", "start", "NetworkManager"], check=False, capture_output=True, text=True)
+                    self.add_log_entry("Restarting NetworkManager...", "info")
+                    nm_restart_result = subprocess.run(["systemctl", "restart", "NetworkManager"], check=False, capture_output=True, text=True)
+                    self.add_log_entry(f"NetworkManager restart stdout: {nm_restart_result.stdout.strip()}", "info")
+                    if nm_restart_result.stderr:
+                        self.add_log_entry(f"NetworkManager restart stderr: {nm_restart_result.stderr.strip()}", "warning")
+                    
                     self.add_log_entry(f"Interface {self.original_interface} successfully reset. NetworkManager restarted.", "info")
                     self.monitor_interface = None
                     self.original_interface = None
                     # No need to rescan, just clear the entry or set to default if desired
                     # self.scan_interfaces() 
                 except FileNotFoundError:
-                    self.add_log_entry("airmon-ng not found, could not deactivate monitor mode.", "warning")
+                    self.add_log_entry("airmon-ng or ip/iwconfig not found, could not deactivate monitor mode. Manual intervention may be required.", "critical")
+                    messagebox.showerror("Error", "Required tools (airmon-ng/ip/iwconfig) not found for mode deactivation. Manual intervention may be required to restore Wi-Fi.")
                 except subprocess.CalledProcessError as e:
-                    self.add_log_entry(f"Error deactivating monitor mode: {e.stderr}", "warning")
+                    self.add_log_entry(f"Error deactivating monitor mode or setting managed mode: {e.stderr}", "critical")
+                    messagebox.showerror("Error", f"Error during Wi-Fi restoration: {e.stderr}. Manual intervention may be required.")
                 except Exception as e:
-                    self.add_log_entry(f"Unexpected error when resetting monitor mode: {str(e)}", "warning")
+                    self.add_log_entry(f"Unexpected error when resetting monitor mode: {str(e)}", "critical")
+                    messagebox.showerror("Error", f"Unexpected error during Wi-Fi restoration: {str(e)}. Manual intervention may be required.")
 
 
     def toggle_honeypot(self):
@@ -516,17 +535,38 @@ class DeauthDetectorGUI:
         # Attempt to deactivate monitor mode if it was active
         if self.monitor_interface and self.original_interface:
             try:
-                self.add_log_entry(f"Setting interface {self.original_interface} back to managed mode...", "info")
-                subprocess.run(["airmon-ng", "stop", self.monitor_interface], check=True, capture_output=True, text=True)
+                self.add_log_entry(f"Attempting to stop monitor mode on {self.monitor_interface} with 'airmon-ng stop'...", "info")
+                stop_monitor_result = subprocess.run(["airmon-ng", "stop", self.monitor_interface], check=True, capture_output=True, text=True)
+                self.add_log_entry(f"airmon-ng stop stdout: {stop_monitor_result.stdout.strip()}", "info")
+                if stop_monitor_result.stderr:
+                    self.add_log_entry(f"airmon-ng stop stderr: {stop_monitor_result.stderr.strip()}", "warning")
+                    
+                # Explicitly set original interface back to managed mode
+                self.add_log_entry(f"Setting interface {self.original_interface} to managed mode and bringing it up...", "info")
+                subprocess.run(["sudo", "ip", "link", "set", self.original_interface, "down"], check=True, capture_output=True, text=True)
+                subprocess.run(["sudo", "iwconfig", self.original_interface, "mode", "managed"], check=True, capture_output=True, text=True)
+                subprocess.run(["sudo", "ip", "link", "set", self.original_interface, "up"], check=True, capture_output=True, text=True)
+                self.add_log_entry(f"Interface {self.original_interface} successfully set to managed mode and brought up.", "info")
+
                 # Restart NetworkManager to restore connectivity
-                subprocess.run(["systemctl", "start", "NetworkManager"], check=False, capture_output=True, text=True)
+                self.add_log_entry("Restarting NetworkManager...", "info")
+                nm_restart_result = subprocess.run(["systemctl", "restart", "NetworkManager"], check=False, capture_output=True, text=True)
+                self.add_log_entry(f"NetworkManager restart stdout: {nm_restart_result.stdout.strip()}", "info")
+                if nm_restart_result.stderr:
+                    self.add_log_entry(f"NetworkManager restart stderr: {nm_restart_result.stderr.strip()}", "warning")
+                
                 self.add_log_entry(f"Interface {self.original_interface} successfully reset. NetworkManager restarted.", "info")
+                self.monitor_interface = None
+                self.original_interface = None
             except FileNotFoundError:
-                self.add_log_entry("airmon-ng not found, could not deactivate monitor mode on close.", "warning")
+                self.add_log_entry("airmon-ng or ip/iwconfig not found, could not deactivate monitor mode. Manual intervention may be required.", "critical")
+                messagebox.showerror("Error", "Required tools (airmon-ng/ip/iwconfig) not found for mode deactivation. Manual intervention may be required to restore Wi-Fi.")
             except subprocess.CalledProcessError as e:
-                self.add_log_entry(f"Error deactivating monitor mode on close: {e.stderr}", "warning")
+                self.add_log_entry(f"Error deactivating monitor mode or setting managed mode: {e.stderr}", "critical")
+                messagebox.showerror("Error", f"Error during Wi-Fi restoration: {e.stderr}. Manual intervention may be required.")
             except Exception as e:
-                self.add_log_entry(f"Unexpected error when resetting monitor mode on close: {str(e)}", "warning")
+                self.add_log_entry(f"Unexpected error when resetting monitor mode: {str(e)}", "critical")
+                messagebox.showerror("Error", f"Unexpected error during Wi-Fi restoration: {str(e)}. Manual intervention may be required.")
 
         if self.sniff_thread and self.sniff_thread.is_alive():
             # Give the sniffing thread some time to terminate
