@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-POLIZEI DeAuth-Guard PRO mit automatischer Erkennung und Anzeige der MAC-Adressen bei echten Attacken.
+Brunoido DeAuth-Guard PRO mit automatischer Erkennung und Anzeige der MAC-Adressen bei echten Attacken.
 Dieses Script erkennt echte Attacken und zeigt die MAC-Adresse des Angreifers vollständig an.
 """
 
@@ -82,8 +82,8 @@ class DeauthDetector:
         self.setup_db()
 
     def setup_db(self):
-        os.makedirs("/var/lib/police", exist_ok=True)
-        self.conn = sqlite3.connect("/var/lib/police/deauth_attacks.db")
+        os.makedirs("/var/lib/brunoido", exist_ok=True)
+        self.conn = sqlite3.connect("/var/lib/brunoido/deauth_attacks.db")
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS attacks (
                 id INTEGER PRIMARY KEY,
@@ -117,7 +117,7 @@ class DeauthDetector:
             except:
                 ssid = "<Hidden>"
 
-        # Erstelle das Daten-Tuple für die Anzeige und Speicherung
+        # Daten für Anzeige und Speicherung
         attack_data = (
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             attacker_mac,
@@ -143,10 +143,10 @@ class DeauthDetector:
         self.running = False
         self.conn.close()
 
-class PoliceGUI:
+class BrunoidoGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("POLIZEI DeAuth-Guard v2.0")
+        self.root.title("Brunoido DeAuth-Guard v2.0")
         self.root.geometry("1000x700")
         self.detector = None
         self.channel_hopper = None
@@ -187,7 +187,7 @@ class PoliceGUI:
         self.stop_btn.grid(row=0, column=7, padx=5)
 
         # Keine manuelle Simulation, alles automatisch
-        # Das Script erkennt Attacken und zeigt MAC an
+        # Das System erkennt Attacken und zeigt MAC an
 
         log_frame = ttk.LabelFrame(main_frame, text="Angriffsprotokoll", padding=10)
         log_frame.pack(fill=tk.BOTH, expand=True)
@@ -237,7 +237,7 @@ class PoliceGUI:
             self.channel_hopper.resume_hopping()
 
     def update_display(self, data):
-        # hier wandeln wir rssi in int um, falls es ein string ist
+        # Hier wandeln wir rssi in int um, falls es ein string ist
         rssi_value = data[3]
         try:
             rssi = int(rssi_value)
@@ -262,5 +262,5 @@ if __name__ == "__main__":
         print("Bitte als Administrator ausführen")
         sys.exit(1)
     root = tk.Tk()
-    app = PoliceGUI(root)
+    app = BrunoidoGUI(root)
     root.mainloop()
