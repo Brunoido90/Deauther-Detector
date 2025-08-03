@@ -35,7 +35,7 @@ Klone das Repository und installiere die benötigten Python-Pakete:
 
 Bash
 
-git clone https://github.com/dein-username/brunoido_deauth_guard.git
+git clone https://github.com/Brunoido90/Deauther-Detector
 cd brunoido_deauth_guard
 pip3 install scapy
 2. Ausführen
