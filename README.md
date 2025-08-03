@@ -1,56 +1,81 @@
-WLAN-Überwachungstool mit Kanal-Hopping und Angriffserkennung
-Dieses Python-basierte Tool dient der Überwachung von WLAN-Netzwerken auf Deauth-Attacken und anderen Angriffen. Es kombiniert eine automatische Kanal-Hopping-Funktion mit einer Echtzeit-Erkennung von Deauth-Paketen, um eine umfassende Überwachung aller WLAN-Aktivitäten zu gewährleisten.
+POLIZEI DeAuth-Guard PRO
+Ein Python-basiertes Tool zur Erkennung von Deauthentication-Attacken im WLAN, mit Echtzeit-Visualisierung und Signalpegelanzeige. Das System erkennt automatisch Angriffspakete, zeigt die MAC-Adresse des Angreifers an, misst die Signalstärke und fokussiert auf den Kanal.
 
-Features
-Automatisches Kanal-Hopping:
-Das Programm wechselt kontinuierlich durch alle WLAN-Kanäle (1-11) im Hintergrund, um möglichst viele Netzwerke und potenzielle Angriffe zu erfassen. Das sorgt für eine flächendeckende Überwachung, auch wenn die Angreifer den Kanal wechseln.
+Funktionen
+Automatische Erkennung von Deauth- und Angriffspaketen:
+Erkennt echte Attacken im WLAN-Netzwerk und zeigt die MAC-Adresse des Angreifers.
 
-Echtzeit-Erkennung von Deauth-Attacken:
-Mithilfe der scapy-Bibliothek wird gezielt nach Deauth-Paketen gesucht. Bei Erkennung einer Attacke werden die Details (Angreifer, Ziel, Signalstärke, Kanal) in einer SQLite-Datenbank gespeichert und in der GUI angezeigt.
+Signalstärke-Messung:
+Liest die Signalqualität direkt aus den empfangenen Paketen (dBm_AntSignal), um die Stärke des Angreifer-Signals anzuzeigen.
 
-Kanal-Fokus bei Angriffen:
-Sobald eine Attacke erkannt wird, bleibt das Programm auf dem Kanal, auf dem die Attacke stattgefunden hat, um die Aktivitäten genauer zu überwachen und weitere Pakete zu analysieren.
+Kanal-Hopping:
+Wechselt kontinuierlich durch Kanäle, um möglichst viele Netzwerke zu überwachen. Bei Angriffserkennung bleibt der Kanal bei Bedarf fixiert.
+
+Angriffsprotokoll:
+Speichert alle erkannten Attacken in einer lokalen SQLite-Datenbank.
 
 Benutzeroberfläche (GUI):
-Mit tkinter bietet das Tool eine übersichtliche GUI, in der man:
+Mit Tkinter für einfache Bedienung und Echtzeit-Visualisierung der Bedrohungssituation.
 
-Das WLAN-Interface auswählen kann
-Die Signalstärke in Echtzeit überwacht
-Die Angriffsdaten in einer Tabelle einsehen
-Den Überwachungsvorgang starten und stoppen kann
-Benutzerrechte:
-Das Programm muss mit Administratorrechten (Root) ausgeführt werden, um die WLAN-Adapter in den Monitor-Modus zu versetzen und Pakete zu sniffen.
-
-Technische Details
-Kanal-Hopping:
-Implementiert mit einem separaten Thread, der alle Kanäle (1-11) im Abstand von 0,5 Sekunden durchläuft. Bei Erkennung einer Attacke wird der Kanal auf den Angriffskanal gesetzt und das Hopping pausiert.
-
-Attack-Erkennung:
-Nutzt scapy zum Sniffen der WLAN-Pakete. Speziell werden Deauth-Pakete (Dot11Deauth) erkannt. Diese werden in einer SQLite-Datenbank geloggt und in der GUI angezeigt.
-
-Datenbank:
-CSV-ähnliche Speicherung aller erkannten Angriffe mit Zeitstempel, Angreifer, Ziel, Signalstärke und Kanal.
-
-Benutzeroberfläche:  
-
-Interface-Auswahl: Dropdown zur Auswahl des WLAN-Adapters
-Signalstärke: Anzeige in Echtzeit mit Farbkennzeichnung
-Angriffsprotokoll: Tabelle mit den letzten Angriffen
-Steuerung: Buttons zum Starten und Stoppen der Überwachung
 Voraussetzungen
-Linux-System mit WLAN-Adapter, der Monitor-Modus unterstützt
-Python 3.x
-scapy (pip install scapy)
-tkinter (standardmäßig enthalten)
-Administratorrechte (z.B. per sudo)
-Hinweise
-Das Programm setzt voraus, dass iwconfig und iw installiert sind.
-Die WLAN-Schnittstelle muss kompatibel mit Monitor-Modus sein.
-Für die Funktionalität ist es notwendig, das Programm als Root auszuführen.
-Beispiel-Workflow
-Programm starten (mit sudo)
-WLAN-Adapter auswählen
-Überwachung starten
-Das Tool durchläuft alle Kanäle, erkennt Attacken in Echtzeit
-Bei Angriffserkennung bleibt das Programm auf dem Kanal des Angriffs, um weitere Pakete zu überwachen
-Überwachung stoppen, um wieder Kanal-Hopping zu aktivieren oder das Programm zu beenden
+Betriebssystem: Linux (z.B. Ubuntu, Kali Linux)
+Benötigte Pakete:
+scapy
+tkinter (meist vorinstalliert)
+sqlite3 (Standard in Python)
+WLAN-Adapter:
+Muss im Monitor-Mode laufen
+Sollte Signalstärke (dBm_AntSignal) in den Paketen liefern (z.B. Alfa AWUS036NHA, TP-Link TL-WN722N v1)
+Treiber:
+Aktueller, funktionsfähiger Treiber, der Signalstärke in den Paketen bereitstellt
+Installation
+Repository klonen / Skript herunterladen:
+CopyRun
+git clone https://github.com/dein-username/polizei_deauth_guard.git
+cd polizei_deauth_guard
+Benötigte Pakete installieren:
+CopyRun
+pip3 install scapy
+Skript als Root / Administrator ausführen:
+CopyRun
+sudo python3 police_deauth_pro.py
+Einrichtung
+Stelle sicher, dass dein WLAN-Adapter im Monitor-Mode läuft:
+CopyRun
+sudo ./dein-skript-zum-aktivieren-oder manuell aktivieren
+Das Script wählt automatisch den ersten verfügbaren WLAN-Adapter aus.
+Nutzung
+Adapter auswählen:
+Im GUI kannst du den WLAN-Adapter aus der Liste wählen.
+
+Monitoring starten:
+Klicke auf "Start". Das System wechselt in Monitor-Mode, beginnt mit Kanal-Hopping und überwacht den Verkehr.
+
+Angriffe erkennen:
+Bei echten Deauth- oder Angriffspaketen:
+
+Die MAC-Adresse des Angreifers wird vollständig im GUI angezeigt.
+Signalstärke in dBm wird angezeigt (sofern dein Adapter diese liefert).
+Attacken werden im Protokoll gespeichert.
+Monitoring stoppen:
+Klicke auf "Stop".
+
+Hinweise zum Signalempfang
+Funktion:
+Das System liest die Signalstärke (dBm_AntSignal) direkt aus den empfangenen WLAN-Paketen. Diese Angabe ist in den meisten Fällen bei Beacon- und Management-Paketen enthalten.
+
+Voraussetzung:
+Dein WLAN-Adapter muss diese Information in den Paketen bereitstellen. Nicht alle Geräte tun das. Empfohlene Modelle sind z.B.:
+
+Alfa AWUS036NHA
+TP-Link TL-WN722N (Version 1)
+Andere, die dBm_AntSignal in Paketen liefern
+Hinweis:
+Wenn die Signalstärke nicht angezeigt wird oder sehr ungenau ist, liegt es meist am Adapter oder Treiber.
+
+Hinweise & Tipps
+Für beste Ergebnisse nutze einen WLAN-Adapter, der Signalstärke in den Paketen liefert.
+Das Tool erkennt nur aktive WLAN-Attacken, die im WLAN-Verkehr sichtbar sind.
+Die Datenbank speichert alle erkannten Attacken inklusive MAC, Zeit, Kanal, Signalstärke.
+Lizenz
+Dieses Projekt ist frei verwendbar. Bei Fragen oder Verbesserungen gerne Pull-Requests schicken.
