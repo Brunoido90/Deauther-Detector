@@ -28,7 +28,7 @@ Repository klonen:
 
 Bash
 
-git clone https://github.com/dein-username/polizei_deauth_guard.git
+git clone https://github.com/Brunoido90/Deauther-Detector
 cd polizei_deauth_guard
 Abhängigkeiten installieren:
 
