@@ -1,7 +1,3 @@
-Hier ist die aktualisierte **README-ähnliche Beschreibung** im Stil von GitHub, bei der der Name **"Brunoido"** anstelle von "Polizei" verwendet wird:
-
----
-
 # Brunoido DeAuth-Guard
 
 Ein Python-basiertes Tool zur Erkennung von Deauthentication-Attacken im WLAN, mit Echtzeit-Visualisierung und Signalpegelanzeige. Das System erkennt automatisch Angriffspakete, zeigt die MAC-Adresse des Angreifers an, misst die Signalstärke und fokussiert auf den Kanal.
