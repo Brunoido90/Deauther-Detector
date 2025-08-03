@@ -1,20 +1,5 @@
-Ich habe den Text so überarbeitet, dass er perfekt für eine GitHub-Seite geeignet ist. Dabei wurden folgende Punkte berücksichtigt:
-
-Übersichtlichkeit: Klare Struktur mit prägnanten Abschnitten für schnelle Erfassung.
-
-Markdown-Format: Nutzung von Markdown-Elementen wie Überschriften, Listen und Code-Blöcken.
-
-Call to Action: Direkte Anleitungen und Aufforderungen zur Installation und Nutzung.
-
-Wichtige Informationen: Alle relevanten Details zu Funktionen, Voraussetzungen und Nutzung sind enthalten.
-
-Code-Blöcke: Befehle wie git clone und pip3 install sind in speziellen Code-Blöcken formatiert.
-
 🛡️ Brunoido DeAuth-Guard 🛡️
-<p align="center">
-<img src="https://img.shields.io/badge/Python-3.x-blue.svg" alt="Python 3.x">
-<img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT">
-</p>
+
 
 Ein ✨ Python-basiertes Tool ✨ zur Echtzeit-Erkennung von Deauthentication-Attacken in WLAN-Netzwerken. Es hilft dir, Angriffe zu erkennen, Angreifer zu identifizieren und deine Netzwerksicherheit zu überwachen. Ein Must-have für jeden Security-Enthusiasten! 🕵️‍♂️
 
