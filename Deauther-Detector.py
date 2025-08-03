@@ -435,4 +435,19 @@ class EliteGUI:
             self.add_to_treeview(ts, attacker_mac, receiver_mac, bssid, rssi, ch, counter_attack)
     
     def add_to_treeview(self, ts, attacker_mac, receiver_mac, bssid, rssi, ch, counter_attack):
-        """Fügt einen Eintrag zum T
+         """Fügt einen Eintrag zum Treeview hinzu und aktualisiert die Ansicht."""
+    tags = ()
+    if rssi > -50:
+        tags = ("highlight",)  # Markiert Einträge mit hohem RSSI rot
+    
+    if counter_attack == "Ja":
+        # Fügt einen weiteren Tag hinzu, um eine Gegenmaßnahme zu markieren
+        tags = tags + ("counter",)
+
+    self.tree.insert("", "end", values=(ts, attacker_mac, receiver_mac, bssid, rssi, ch, counter_attack), tags=tags)
+    
+    # Entfernt alte Einträge, um die Leistung zu optimieren
+    if len(self.tree.get_children()) > 100:
+        self.tree.delete(self.tree.get_children()[0])
+    
+    self.tree.yview_moveto(1)  # Scrollt automatisch zum letzten Eintrag
