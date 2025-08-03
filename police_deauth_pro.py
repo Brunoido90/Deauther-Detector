@@ -1,25 +1,52 @@
 #!/usr/bin/env python3
 """
-POLIZEI DeAuth-Guard - ULTIMATIVE EINSATZVERSION
-Garantiert lauffähig mit 100% Adaptererkennung
+POLIZEI DeAuth-Guard ULTIMATIVE
+Automatisierte Erkennung + Monitor-Mode Aktivierung
+Für technisch weniger versierte Kollegen
 """
 
 import os
 import sys
+import time
 import subprocess
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
+from scapy.all import sniff, Dot11Deauth, RadioTap, Dot11
 
-class WiFiScanner:
-    @staticmethod
-    def get_interfaces():
-        """Erkennt ALLE verfügbaren WLAN-Adapter mit 5 verschiedenen Methoden"""
+class AutoDeauthDetector:
+    def __init__(self):
+        # Automatische Konfiguration beim Start
+        self.interface = self.auto_setup()
+        self.running = False
+        
+        if not self.interface:
+            messagebox.showerror(
+                "Kritischer Fehler",
+                "Kein kompatibler WLAN-Adapter gefunden!\n\n"
+                "Bitte:\n"
+                "1. WLAN-Adapter einstecken\n"
+                "2. Treiber installieren\n"
+                "3. System neustarten"
+            )
+            sys.exit(1)
+
+    def auto_setup(self):
+        """Automatische Adaptererkennung und Konfiguration"""
+        # 1. Verfügbare Adapter finden
+        ifaces = self.detect_interfaces()
+        
+        # 2. Monitor-Mode aktivieren
+        for iface in ifaces:
+            if self.force_monitor_mode(iface):
+                return iface
+        return None
+
+    def detect_interfaces(self):
+        """Erkennt alle WLAN-Adapter mit 3 Methoden"""
         methods = [
-            WiFiScanner._via_ip_link,
-            WiFiScanner._via_sysfs,
-            WiFiScanner._via_iwconfig,
-            WiFiScanner._via_rfkill,
-            WiFiScanner._via_hardware
+            self._detect_via_ip_link,  # Modernste Methode
+            self._detect_via_sysfs,    # Universell
+            self._detect_via_iwconfig  # Legacy
         ]
         
         for method in methods:
@@ -29,11 +56,11 @@ class WiFiScanner:
                     return ifaces
             except:
                 continue
-        return ["wlan0"]  # Garantierter Fallback
+        return []
 
     @staticmethod
-    def _via_ip_link():
-        """Modernste Erkennungsmethode (ip-Befehl)"""
+    def _detect_via_ip_link():
+        """Erkennung mit ip-Befehl (modern)"""
         output = subprocess.check_output(["ip", "link", "show"], text=True)
         return [
             line.split(':')[1].split()[0] 
@@ -42,134 +69,114 @@ class WiFiScanner:
         ]
 
     @staticmethod
-    def _via_sysfs():
-        """Linux Kernel SysFS Methode"""
+    def _detect_via_sysfs():
+        """SysFS Methode (Linux Kernel)"""
         return [
             iface for iface in os.listdir('/sys/class/net') 
             if os.path.exists(f'/sys/class/net/{iface}/wireless')
         ]
 
     @staticmethod
-    def _via_iwconfig():
-        """Legacy Wireless Extensions"""
+    def _detect_via_iwconfig():
+        """Wireless Extensions (Legacy)"""
         output = subprocess.check_output(["iwconfig"], text=True, stderr=subprocess.DEVNULL)
         return [line.split()[0] for line in output.split('\n') if "IEEE" in line]
 
-    @staticmethod
-    def _via_rfkill():
-        """Hardware-Level Erkennung"""
-        output = subprocess.check_output(["rfkill", "list"], text=True)
-        return [
-            line.split(':')[1].strip() 
-            for line in output.split('\n') 
-            if 'Wireless LAN' in line
-        ]
-
-    @staticmethod
-    def _via_hardware():
-        """Direkte Hardware-Erkennung"""
-        adapters = []
-        # PCI-Adapter
-        if os.path.exists('/usr/bin/lspci'):
-            output = subprocess.check_output(["lspci"], text=True)
-            adapters += [
-                f"wlp{idx}s0" 
-                for idx, line in enumerate(output.split('\n')) 
-                if 'Network controller' in line
-            ]
-        # USB-Adapter
-        output = subprocess.check_output(["lsusb"], text=True)
-        adapters += [
-            f"wlx{line.split()[5].replace(':', '')}" 
-            for line in output.split('\n') 
-            if 'Wireless' in line
-        ]
-        return adapters
-
-class PoliceDeauthApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("POLIZEI DeAuth-Guard v3.0")
-        self.root.geometry("800x600")
-        
-        self.setup_ui()
-        self.refresh_interfaces()
-
-    def setup_ui(self):
-        """Erstellt die Benutzeroberfläche"""
-        main_frame = ttk.Frame(self.root, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Interface Auswahl
-        ttk.Label(main_frame, text="WLAN Interface:").pack()
-        self.interface_var = tk.StringVar()
-        self.interface_dropdown = ttk.Combobox(main_frame, textvariable=self.interface_var)
-        self.interface_dropdown.pack(fill=tk.X, pady=10)
-        
-        # Aktualisieren Button
-        ttk.Button(main_frame, 
-                 text="Adapter aktualisieren", 
-                 command=self.refresh_interfaces).pack(pady=5)
-        
-        # Start Button
-        ttk.Button(main_frame,
-                 text="Überwachung starten",
-                 command=self.start_monitoring).pack(pady=20)
-        
-        # Status Anzeige
-        self.status = ttk.Label(main_frame, text="Bereit zur Überwachung", relief=tk.SUNKEN)
-        self.status.pack(fill=tk.X, pady=10)
-
-    def refresh_interfaces(self):
-        """Aktualisiert die Liste der verfügbaren Adapter"""
-        ifaces = WiFiScanner.get_interfaces()
-        self.interface_dropdown['values'] = ifaces
-        if ifaces:
-            self.interface_var.set(ifaces[0])
-            self.status.config(text=f"{len(ifaces)} Adapter gefunden")
-        else:
-            self.status.config(text="Keine Adapter gefunden!")
-        return ifaces
-
-    def start_monitoring(self):
-        """Startet die DeAuth-Überwachung"""
-        iface = self.interface_var.get()
-        if not iface:
-            messagebox.showerror("Fehler", "Kein WLAN-Interface ausgewählt!")
-            return
-        
-        if self.enable_monitor_mode(iface):
-            self.status.config(text=f"Überwache {iface}...")
-            messagebox.showinfo("Erfolg", "Überwachung erfolgreich gestartet!")
-        else:
-            messagebox.showerror("Fehler", "Monitor-Mode konnte nicht aktiviert werden!")
-
-    @staticmethod
-    def enable_monitor_mode(interface):
-        """Aktiviert den Monitor-Mode"""
+    def force_monitor_mode(self, interface):
+        """Aktiviert Monitor-Mode mit allen verfügbaren Methoden"""
         methods = [
-            ["sudo", "iw", interface, "set", "monitor", "none"],
-            ["sudo", "airmon-ng", "start", interface],
-            ["sudo", "ifconfig", interface, "down"],
-            ["sudo", "iwconfig", interface, "mode", "monitor"],
-            ["sudo", "ifconfig", interface, "up"]
+            f"ip link set {interface} down && iw {interface} set monitor control && ip link set {interface} up",
+            f"airmon-ng check kill && airmon-ng start {interface}",
+            f"ifconfig {interface} down && iwconfig {interface} mode monitor && ifconfig {interface} up"
         ]
         
         for cmd in methods:
             try:
-                subprocess.run(cmd, check=True, timeout=10)
-                return True
+                subprocess.run(cmd, shell=True, check=True, timeout=30)
+                time.sleep(2)  # Wartezeit für Interface-Aktivierung
+                
+                # Erfolgsprüfung
+                result = subprocess.run(["iwconfig", interface], capture_output=True, text=True)
+                if "Mode:Monitor" in result.stdout:
+                    return True
             except:
                 continue
         return False
 
+    def start_detection(self):
+        """Startet die automatische DeAuth-Erkennung"""
+        self.running = True
+        sniff(iface=self.interface,
+              prn=self.handle_packet,
+              store=False,
+              monitor=True)
+
+    def handle_packet(self, pkt):
+        """Verarbeitet erkannte DeAuth-Pakete"""
+        if pkt.haslayer(Dot11Deauth):
+            attacker = pkt.addr2[:8] + "..." if pkt.addr2 else "Unknown"
+            target = pkt.addr1[:8] + "..." if pkt.addr1 else "Unknown"
+            
+            # Hier könnten Sie eine Benachrichtigung einfügen
+            print(f"Angriff erkannt! Angreifer: {attacker} -> Ziel: {target}")
+
+    def stop(self):
+        """Stoppt die Überwachung"""
+        self.running = False
+
+class SimpleGUI:
+    """Minimale GUI für Kollegen"""
+    def __init__(self):
+        self.detector = AutoDeauthDetector()
+        self.setup_gui()
+
+    def setup_gui(self):
+        """Erstellt eine einfache Statusanzeige"""
+        self.root = tk.Tk()
+        self.root.title("POLIZEI DeAuth-Guard")
+        self.root.geometry("400x200")
+        
+        tk.Label(
+            self.root, 
+            text="DeAuth-Angriffsdetektor",
+            font=("Arial", 16)
+        ).pack(pady=20)
+        
+        tk.Label(
+            self.root,
+            text=f"Aktives Interface: {self.detector.interface}",
+            font=("Arial", 12)
+        ).pack()
+        
+        self.status = tk.Label(
+            self.root,
+            text="Status: Überwachung aktiv",
+            fg="green",
+            font=("Arial", 12)
+        self.status.pack(pady=20)
+        
+        tk.Button(
+            self.root,
+            text="Beenden",
+            command=self.cleanup,
+            bg="red",
+            fg="white"
+        ).pack()
+        
+        # Starte Überwachung im Hintergrund
+        threading.Thread(target=self.detector.start_detection, daemon=True).start()
+
+    def cleanup(self):
+        """Aufräumen beim Beenden"""
+        self.detector.stop()
+        self.root.destroy()
+
 if __name__ == "__main__":
-    # Root-Check
+    # Root-Rechte prüfen
     if os.geteuid() != 0:
-        print("Bitte als Root ausführen: sudo python3 police_deauth_final.py")
+        print("Bitte als Administrator ausführen: sudo python3 police_deauth_auto.py")
         sys.exit(1)
     
     # GUI starten
-    root = tk.Tk()
-    app = PoliceDeauthApp(root)
-    root.mainloop()
+    app = SimpleGUI()
+    app.root.mainloop()
