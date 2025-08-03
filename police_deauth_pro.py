@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-POLIZEI DeAuth-Guard PRO mit Live-Adaptererkennung
+POLIZEI DeAuth-Guard PRO - Kompatibel mit allen WLAN-Treibern
 """
 
 import os
@@ -86,7 +86,7 @@ class DeauthMonitor:
 class PoliceGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("POLIZEI DeAuth-Guard PRO v2.0")
+        self.root.title("POLIZEI DeAuth-Guard PRO v2.1")
         self.root.geometry("1000x700")
         
         self.setup_style()
@@ -116,7 +116,7 @@ class PoliceGUI:
         control_frame = ttk.LabelFrame(main_frame, text="Adaptersteuerung", padding="10")
         control_frame.pack(fill=tk.X, pady=5)
         
-        # Interface Auswahl mit Aktualisierungsbutton
+        # Interface Auswahl
         ttk.Label(control_frame, text="WLAN Interface:").grid(row=0, column=0)
         self.interface_var = tk.StringVar()
         self.interface_menu = ttk.Combobox(control_frame, 
@@ -124,6 +124,7 @@ class PoliceGUI:
                                          state="readonly")
         self.interface_menu.grid(row=0, column=1, padx=5, sticky=tk.EW)
         
+        # Aktualisierungsbutton
         self.refresh_btn = ttk.Button(control_frame, 
                                     text="Adapter aktualisieren", 
                                     command=self.refresh_interfaces)
@@ -183,38 +184,70 @@ class PoliceGUI:
         status_bar.pack(fill=tk.X, pady=(5,0))
 
     def get_available_interfaces(self):
-        """Erkennt alle verfügbaren WLAN-Adapter mit Monitor-Mode"""
+        """Robuste Adaptererkennung ohne Wireless Extensions"""
         try:
-            # Liste aller Netzwerkinterfaces
-            output = subprocess.check_output(["iwconfig"], text=True)
-            interfaces = [line.split()[0] for line in output.split('\n') if "IEEE" in line]
+            # Methode 1: ip-Befehl (neuere Systeme)
+            try:
+                output = subprocess.check_output(["ip", "link", "show"], text=True)
+                interfaces = [line.split(':')[1].strip() 
+                            for line in output.split('\n') 
+                            if 'state UP' in line and 'wireless' in line]
+                return interfaces
+            except:
+                pass
             
-            # Filtere nur solche mit Monitor-Mode
-            monitor_interfaces = []
-            for iface in interfaces:
-                try:
-                    mode = subprocess.check_output(["iw", iface, "info"], text=True)
-                    if "monitor" in mode.lower():
-                        monitor_interfaces.append(iface)
-                except:
-                    continue
+            # Methode 2: ls /sys/class/net (falls ip nicht verfügbar)
+            try:
+                interfaces = os.listdir('/sys/class/net')
+                wireless_ifaces = []
+                for iface in interfaces:
+                    if os.path.exists(f'/sys/class/net/{iface}/wireless'):
+                        wireless_ifaces.append(iface)
+                return wireless_ifaces
+            except:
+                pass
             
-            return monitor_interfaces
+            # Methode 3: iwconfig Fallback
+            try:
+                output = subprocess.check_output(["iwconfig"], text=True, stderr=subprocess.DEVNULL)
+                return [line.split()[0] for line in output.split('\n') if "IEEE" in line]
+            except:
+                pass
+            
+            return []  # Keine Interfaces gefunden
             
         except Exception as e:
             print(f"Interface-Erkennungsfehler: {e}")
-            return ["wlan0mon", "wlan1mon"]  # Fallback
+            return []
 
     def refresh_interfaces(self):
-        """Aktualisiert die Interface-Liste"""
-        self.available_interfaces = self.get_available_interfaces()
+        """Aktualisiert die Interface-Liste mit Monitor-Mode-Check"""
+        all_interfaces = self.get_available_interfaces()
+        monitor_interfaces = []
+        
+        for iface in all_interfaces:
+            # Prüfe auf Monitor-Mode Fähigkeit
+            try:
+                # Erster Versuch mit iw
+                mode_info = subprocess.check_output(["iw", iface, "info"], text=True, stderr=subprocess.DEVNULL)
+                if "monitor" in mode_info.lower():
+                    monitor_interfaces.append(iface)
+                else:
+                    # Versuche Monitor-Mode zu aktivieren
+                    subprocess.run(["sudo", "iw", iface, "set", "monitor", "none"], 
+                                 stderr=subprocess.DEVNULL)
+                    monitor_interfaces.append(iface)
+            except:
+                continue
+        
+        self.available_interfaces = monitor_interfaces
         self.interface_menu['values'] = self.available_interfaces
         
         if self.available_interfaces:
             self.interface_var.set(self.available_interfaces[0])
             self.status_var.set(f"{len(self.available_interfaces)} Adapter gefunden")
         else:
-            self.status_var.set("Keine WLAN-Adapter mit Monitor-Mode gefunden!")
+            self.status_var.set("Keine kompatiblen WLAN-Adapter gefunden!")
             
         return self.available_interfaces
 
@@ -227,6 +260,13 @@ class PoliceGUI:
         iface = self.interface_var.get()
         if not iface:
             messagebox.showerror("Fehler", "Bitte WLAN-Interface auswählen!")
+            return
+        
+        # Versuche Monitor-Mode zu aktivieren falls nötig
+        try:
+            subprocess.run(["sudo", "iw", iface, "set", "monitor", "none"], check=True)
+        except subprocess.CalledProcessError:
+            messagebox.showerror("Fehler", f"Konnte Monitor-Mode auf {iface} nicht aktivieren!")
             return
         
         self.monitor = DeauthMonitor(iface, self.add_attack)
@@ -248,12 +288,10 @@ class PoliceGUI:
         rssi = int(data[3].split()[0])
         self.update_signal_meter(rssi)
         
-        # Alte Einträge löschen
         if len(self.tree.get_children()) > 100:
             self.tree.delete(self.tree.get_children()[-1])
 
     def update_signal_meter(self, rssi):
-        """Aktualisiert die Signalstärken-Anzeige"""
         percent = max(0, min(100, int((rssi + 90) * 1.67)))
         self.signal_meter["value"] = percent
         
