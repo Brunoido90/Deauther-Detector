@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Brunoido DeAuth-Guard mit verbesserter Interface-Erkennung und Fehlerbehandlung.
-"""
-
 import os
 import sys
 import time
@@ -10,54 +6,72 @@ import threading
 import subprocess
 import sqlite3
 from datetime import datetime
-import pywifi
+import logging
+
 from scapy.all import sniff, Dot11Deauth, Dot11Beacon
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-def list_network_interfaces():
-    """Listet alle verfügbaren WLAN-Interfaces auf."""
-    interfaces = []
+# Konfiguration
+DB_PATH = "/var/lib/brunoido/deauth_attacks.db"
 
-    # Über 'iw dev'
-    try:
-        output = subprocess.check_output(["iw", "dev"], text=True)
-        interfaces += [line.split()[1] for line in output.splitlines() if "Interface" in line]
-    except Exception as e:
-        print(f"Fehler bei 'iw dev': {e}")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    # Über 'ip link'
-    try:
-        output = subprocess.check_output(["ip", "link"], text=True)
-        for line in output.splitlines():
-            if ": " in line:
-                parts = line.split(": ")
-                if len(parts) > 1:
-                    iface_name = parts[1].split()[0]
-                    if "wlan" in iface_name or "wl" in iface_name:
-                        if iface_name not in interfaces:
-                            interfaces.append(iface_name)
-    except Exception as e:
-        print(f"Fehler bei 'ip link': {e}")
 
-    # Falls keine gefunden, Standard-Interfaces hinzufügen
-    if not interfaces:
-        interfaces.append("wlan0")
+class MonitorMode:
+    @staticmethod
+    def enable(iface):
+        try:
+            print(f"Versuche, {iface} in den Monitor-Modus zu setzen...")
+            subprocess.check_call(["sudo", "ip", "link", "set", iface, "down"])
+            result = subprocess.run(["iw", iface, "set", "monitor", "control"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if result.returncode != 0:
+                print(f"Fehler beim Setzen in den Monitor-Modus: {result.stderr.strip()}")
+                return False
+            subprocess.check_call(["sudo", "ip", "link", "set", iface, "up"])
+            time.sleep(1)
+            info = subprocess.getoutput(f"iw dev {iface} info")
+            if "monitor" in info:
+                print(f"{iface} ist jetzt im Monitor-Modus.")
+                return True
+            else:
+                print(f"{iface} konnte nicht in den Monitor-Modus gesetzt werden.")
+                return False
+        except subprocess.CalledProcessError as e:
+            print(f"Fehler bei der Ausführung: {e}")
+            return False
 
-    return list(set(interfaces))
 
-def enable_monitor_mode(interface):
-    """Aktiviert den Monitor-Modus auf dem Interface."""
-    try:
-        subprocess.check_call(["sudo", "ip", "link", "set", interface, "down"])
-        subprocess.check_call(["sudo", "iw", interface, "set", "monitor", "control"])
-        subprocess.check_call(["sudo", "ip", "link", "set", interface, "up"])
-        time.sleep(1)
-        info = subprocess.getoutput(f"iw {interface} info")
-        return "monitor" in info
-    except Exception as e:
-        print(f"Fehler beim Aktivieren des Monitor-Modus: {e}")
-        return False
+class InterfaceScanner:
+    @staticmethod
+    def list_interfaces():
+        interfaces = []
+
+        try:
+            output = subprocess.check_output(["iw", "dev"], text=True)
+            interfaces += [line.split()[1] for line in output.splitlines() if "Interface" in line]
+        except Exception as e:
+            print(f"iw dev Fehler: {e}")
+
+        try:
+            output = subprocess.check_output(["ip", "link"], text=True)
+            for line in output.splitlines():
+                if ": " in line:
+                    parts = line.split(": ")
+                    if len(parts) > 1:
+                        name = parts[1].split()[0]
+                        if ("wlan" in name or "wl" in name) and "p2p" not in name:
+                            if name not in interfaces:
+                                interfaces.append(name)
+        except Exception as e:
+            print(f"ip link Fehler: {e}")
+
+        if not interfaces:
+            interfaces.append("wlan0")
+        return list(set(interfaces))
+
 
 class ChannelHopper:
     def __init__(self, iface):
@@ -65,10 +79,13 @@ class ChannelHopper:
         self.running = False
         self.stop_hopping = False
         self.current_channel = 1
+        self.thread = None
 
     def start(self):
-        self.running = True
-        threading.Thread(target=self._hop, daemon=True).start()
+        if not self.running:
+            self.running = True
+            self.thread = threading.Thread(target=self._hop, daemon=True)
+            self.thread.start()
 
     def _hop(self):
         channels = range(1, 13)
@@ -94,18 +111,18 @@ class ChannelHopper:
 
     def stop(self):
         self.running = False
+        if self.thread and self.thread.is_alive():
+            self.thread.join()
 
-class DeauthDetector:
-    def __init__(self, iface, callback, channel_hopper):
-        self.iface = iface
-        self.callback = callback
-        self.channel_hopper = channel_hopper
-        self.running = False
+
+class AttackLogger:
+    def __init__(self, db_path=DB_PATH):
+        self.db_path = db_path
         self._setup_db()
 
     def _setup_db(self):
-        os.makedirs("/var/lib/brunoido", exist_ok=True)
-        self.conn = sqlite3.connect("/var/lib/brunoido/deauth_attacks.db")
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self.conn = sqlite3.connect(self.db_path)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS attacks (
                 id INTEGER PRIMARY KEY,
@@ -119,10 +136,36 @@ class DeauthDetector:
         """)
         self.conn.commit()
 
+    def log_attack(self, timestamp, attacker, target, ssid, rssi, channel):
+        try:
+            self.conn.execute(
+                "INSERT INTO attacks (timestamp, attacker, target, ssid, rssi, channel) VALUES (?, ?, ?, ?, ?, ?)",
+                (timestamp, attacker, target, ssid, rssi, channel)
+            )
+            self.conn.commit()
+        except Exception as e:
+            print(f"Log Error: {e}")
+
+    def close(self):
+        self.conn.close()
+
+
+class DeauthSniffer:
+    def __init__(self, iface, callback, channel_hopper, logger):
+        self.iface = iface
+        self.callback = callback
+        self.channel_hopper = channel_hopper
+        self.logger = logger
+        self.running = False
+        self.thread = None
+
     def start(self):
         self.running = True
-        sniff(iface=self.iface, prn=self._handle_packet, store=False,
-              stop_filter=lambda x: not self.running)
+        self.thread = threading.Thread(target=self._sniff, daemon=True)
+        self.thread.start()
+
+    def _sniff(self):
+        sniff(iface=self.iface, prn=self._handle_packet, store=False, stop_filter=lambda x: not self.running)
 
     def _handle_packet(self, pkt):
         if not pkt.haslayer(Dot11Deauth):
@@ -136,39 +179,39 @@ class DeauthDetector:
                 ssid = pkt.info.decode()
             except:
                 ssid = "<Versteckt>"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        channel = self.channel_hopper.current_channel
 
-        data = (
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            attacker,
-            target,
-            ssid,
-            rssi,
-            self.channel_hopper.current_channel
-        )
+        # Log attack
+        self.logger.log_attack(timestamp, attacker, target, ssid, rssi, channel)
 
-        print("Attack erkannt:", data)
-        self._log_attack(data)
-        self.channel_hopper.focus_on(data[5])
-        self.callback(data)
-
-    def _log_attack(self, data):
-        try:
-            self.conn.execute("INSERT INTO attacks VALUES (NULL, ?, ?, ?, ?, ?, ?)", data)
-            self.conn.commit()
-        except Exception as e:
-            print(f"Fehler beim Loggen: {e}")
+        # UI Update via callback
+        self.callback((timestamp, attacker, target, ssid, rssi, channel))
+        # Kanal fokussieren
+        self.channel_hopper.focus_on(channel)
 
     def stop(self):
         self.running = False
-        self.conn.close()
+        if self.thread and self.thread.is_alive():
+            self.thread.join()
 
-class BrunoidoGUI:
+
+class GUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Brunoido DeAuth-Guard v2.0")
         self.root.geometry("1000x700")
         self._init_widgets()
+
+        self.interfaces = []
+        self.adapter_name = None
+        self.channel_hopper = None
+        self.sniffer = None
+        self.logger = AttackLogger()
+
         self._update_interfaces()
+
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
 
     def _init_widgets(self):
         style = ttk.Style()
@@ -177,35 +220,36 @@ class BrunoidoGUI:
         style.configure('yellow.Horizontal.TProgressbar', background='#f39c12')
         style.configure('red.Horizontal.TProgressbar', background='#e74c3c')
 
-        main = ttk.Frame(self.root, padding=10)
-        main.pack(fill=tk.BOTH, expand=True)
+        main_frame = ttk.Frame(self.root, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        control = ttk.LabelFrame(main, text="Steuerung", padding=10)
-        control.pack(fill=tk.X, pady=5)
+        control_frame = ttk.LabelFrame(main_frame, text="Steuerung", padding=10)
+        control_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Label(control, text="WLAN Adapter:").grid(row=0, column=0)
+        ttk.Label(control_frame, text="WLAN Adapter:").grid(row=0, column=0)
         self.iface_var = tk.StringVar()
-        self.iface_combo = ttk.Combobox(control, textvariable=self.iface_var, state="readonly")
+        self.iface_combo = ttk.Combobox(control_frame, textvariable=self.iface_var, state="readonly")
         self.iface_combo.grid(row=0, column=1, padx=5)
 
-        ttk.Label(control, text="Signalstärke:").grid(row=0, column=2)
+        ttk.Label(control_frame, text="Signalstärke:").grid(row=0, column=2)
         self.rssi_var = tk.StringVar(value="--- dBm")
-        ttk.Label(control, textvariable=self.rssi_var, width=10).grid(row=0, column=3)
+        ttk.Label(control_frame, textvariable=self.rssi_var, width=10).grid(row=0, column=3)
 
-        self.signal_progress = ttk.Progressbar(control, length=100, mode='determinate')
+        self.signal_progress = ttk.Progressbar(control_frame, length=100, mode='determinate')
         self.signal_progress.grid(row=0, column=4, padx=5)
 
-        ttk.Button(control, text="↻ Aktualisieren", command=self._update_interfaces).grid(row=0, column=5, padx=5)
+        ttk.Button(control_frame, text="↻ Aktualisieren", command=self._update_interfaces).grid(row=0, column=5, padx=5)
 
-        self.btn_start = ttk.Button(control, text="▶ Start", command=self._start_monitoring)
+        self.btn_start = ttk.Button(control_frame, text="▶ Start", command=self._start)
         self.btn_start.grid(row=0, column=6, padx=5)
 
-        self.btn_stop = ttk.Button(control, text="■ Stop", command=self._stop_monitoring, state=tk.DISABLED)
+        self.btn_stop = ttk.Button(control_frame, text="■ Stop", command=self._stop, state=tk.DISABLED)
         self.btn_stop.grid(row=0, column=7, padx=5)
 
-        ttk.Button(control, text="Log exportieren", command=self._export_log).grid(row=0, column=8, padx=5)
+        ttk.Button(control_frame, text="Log exportieren", command=self._export_log).grid(row=0, column=8, padx=5)
 
-        log_frame = ttk.LabelFrame(main, text="Angriffsprotokoll", padding=10)
+        # Log
+        log_frame = ttk.LabelFrame(main_frame, text="Angriffsprotokoll", padding=10)
         log_frame.pack(fill=tk.BOTH, expand=True)
 
         columns = ("Zeit", "Angreifer", "Ziel", "Signal", "Kanal")
@@ -220,66 +264,66 @@ class BrunoidoGUI:
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
 
     def _update_interfaces(self):
-        # Nutze pywifi, um die echten WLAN-Adapter-Namen zu bekommen
         try:
-            adapters = list(set([adapter.name() for adapter in pywifi.PyWiFi().interfaces()]))
-        except Exception as e:
-            print(f"Fehler bei pywifi: {e}")
-            adapters = []
+            import pywifi
+            wifi = pywifi.PyWiFi()
+            interfaces = [iface.name() for iface in wifi.interfaces()]
+        except:
+            interfaces = []
 
-        # Falls keine gefunden, auf 'ip link' zurückgreifen
-        if not adapters:
-            interfaces = list_network_interfaces()
-            self.iface_combo['values'] = interfaces
-            if interfaces:
-                self.iface_var.set(interfaces[0])
-            else:
-                self.iface_var.set("Kein Interface gefunden")
+        if not interfaces:
+            interfaces = InterfaceScanner.list_interfaces()
+
+        self.interfaces = interfaces
+        self.iface_combo['values'] = self.interfaces
+        if self.interfaces:
+            self.iface_var.set(self.interfaces[0])
         else:
-            self.iface_combo['values'] = adapters
-            self.iface_var.set(adapters[0])
+            self.iface_var.set("Kein Interface gefunden")
 
-    def _start_monitoring(self):
-        iface_name = self.iface_var.get()
-        if not iface_name or iface_name == "Kein Interface gefunden":
+    def _start(self):
+        iface = self.iface_var.get()
+        if not iface or iface == "Kein Interface gefunden":
             messagebox.showerror("Fehler", "Bitte einen WLAN-Adapter auswählen!")
             return
-        self.adapter_name = iface_name
+        self.adapter_name = iface
 
-        # Monitor-Mode aktivieren
-        if not enable_monitor_mode(self.adapter_name):
-            messagebox.showerror("Fehler", f"Monitor-Mode auf {self.adapter_name} fehlgeschlagen!\nBitte anderen Adapter wählen.")
+        # Monitor Mode aktivieren
+        if not MonitorMode.enable(self.adapter_name):
+            messagebox.showerror("Fehler", f"Monitor-Mode auf {self.adapter_name} fehlgeschlagen!")
             return
 
         # Kanalhopping starten
         self.channel_hopper = ChannelHopper(self.adapter_name)
         self.channel_hopper.start()
 
-        # Erkennung starten
-        self.detector = DeauthDetector(self.adapter_name, self._update_ui, self.channel_hopper)
-        threading.Thread(target=self.detector.start, daemon=True).start()
+        # Sniffer starten
+        self.sniffer = DeauthSniffer(self.adapter_name, self._update_ui, self.channel_hopper, self.logger)
+        self.sniffer.start()
 
         self.btn_start.config(state=tk.DISABLED)
         self.btn_stop.config(state=tk.NORMAL)
 
-    def _stop_monitoring(self):
-        if hasattr(self, 'detector'):
-            self.detector.stop()
-        if hasattr(self, 'channel_hopper'):
+    def _stop(self):
+        if self.sniffer:
+            self.sniffer.stop()
+        if self.channel_hopper:
             self.channel_hopper.stop()
         self.btn_start.config(state=tk.NORMAL)
         self.btn_stop.config(state=tk.DISABLED)
-        if hasattr(self, 'channel_hopper'):
+        if self.channel_hopper:
             self.channel_hopper.resume()
 
     def _update_ui(self, data):
+        rssi = data[4]
         try:
-            rssi_value = int(data[3])
+            rssi_value = int(rssi)
         except:
             rssi_value = -100
         self.rssi_var.set(f"{rssi_value} dBm")
         val = max(0, min(100, abs(rssi_value)))
         self.signal_progress['value'] = val
+
         if rssi_value > -60:
             style_name = 'green.Horizontal.TProgressbar'
         elif rssi_value > -75:
@@ -305,10 +349,29 @@ class BrunoidoGUI:
         except Exception as e:
             messagebox.showerror("Fehler", f"Fehler beim Export: {e}")
 
+    def _on_closing(self):
+        print("Programm wird beendet...")
+        if hasattr(self, 'sniffer') and self.sniffer:
+            self.sniffer.stop()
+        if hasattr(self, 'channel_hopper') and self.channel_hopper:
+            self.channel_hopper.stop()
+        self.root.destroy()
+
+
 if __name__ == "__main__":
+    # Prüfen auf Root-Rechte
     if os.geteuid() != 0:
-        print("Bitte als root/Administrator ausführen.")
+        print("Bitte das Programm als root ausführen (z.B. sudo).")
         sys.exit(1)
+
+    # Monitor Modus aktivieren auf wlan1
+    interface_name = "wlan1"
+    if not MonitorMode.enable(interface_name):
+        print(f"Fehler: Monitor-Modus auf {interface_name} konnte nicht aktiviert werden.")
+        sys.exit(1)
+
+    # GUI starten
     root = tk.Tk()
-    app = BrunoidoGUI(root)
+    app = GUI(root)
+    root.protocol("WM_DELETE_WINDOW", app._on_closing)
     root.mainloop()
