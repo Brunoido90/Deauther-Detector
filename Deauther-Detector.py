@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DeAuth-Guard PRO mit Signalpegel (RSSI)
+DeAuth-Guard PRO mit Signalpegel (RSSI) - KORRIGIERTE VERSION
 """
 
 import os
@@ -8,16 +8,17 @@ import sys
 import time
 import re
 import sqlite3
+import threading
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox
 from scapy.all import sniff, Dot11Deauth, RadioTap, Dot11, sendp
+from queue import Queue, Empty
 
 # ================= KONFIGURATION =================
 DB_FILE = "police_deauth.db"
-MAX_ATTACKS = 100  # Maximale Angriffe zur Anzeige
+MAX_ATTACKS = 100
 
-# ================= FUNKTIONEN =================
 class DeauthMonitor:
     def __init__(self, interface, gui_update_callback):
         self.interface = interface
@@ -50,23 +51,18 @@ class DeauthMonitor:
         if not pkt.haslayer(Dot11Deauth):
             return
 
-        # Signalstärke (RSSI) auslesen
         rssi = pkt.dBm_AntSignal if hasattr(pkt, 'dBm_AntSignal') else -100
         
-        # Angriffsdaten
         attack_data = (
             datetime.now().strftime("%H:%M:%S"),
-            pkt.addr2[:12] + "...",  # Angreifer MAC (gekürzt)
-            pkt.addr1[:12] + "...",   # Ziel MAC
-            f"{rssi} dBm",             # Signalstärke
-            self.get_channel(pkt),     # Kanal
-            "ERKANNT"                  # Status
+            pkt.addr2[:12] + "...",
+            pkt.addr1[:12] + "...",
+            f"{rssi} dBm",
+            self.get_channel(pkt),
+            "ERKANNT"
         )
 
-        # Datenbank speichern
         self.save_to_db(attack_data)
-        
-        # GUI aktualisieren
         self.gui_update(attack_data)
 
     def get_channel(self, pkt):
@@ -85,23 +81,16 @@ class DeauthMonitor:
         self.running = False
         self.conn.close()
 
-# ================= BENUTZEROBERFLÄCHE =================
 class PoliceGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("POLIZEI DeAuth-Guard PRO")
+        self.root.title("DeAuth-Guard PRO")
         self.root.geometry("1000x700")
         
-        # Style
         self.setup_style()
-        
-        # GUI Elemente
         self.create_widgets()
         
-        # Monitor-Thread
         self.monitor = None
-        
-        # Auto-Update
         self.root.after(500, self.update_gui)
 
     def setup_style(self):
@@ -114,7 +103,6 @@ class PoliceGUI:
         style.configure('Green.TLabel', foreground='green')
 
     def create_widgets(self):
-        # Hauptframe
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
@@ -122,12 +110,10 @@ class PoliceGUI:
         control_frame = ttk.LabelFrame(main_frame, text="Steuerung", padding="10")
         control_frame.pack(fill=tk.X, pady=5)
         
-        # Interface Auswahl
         ttk.Label(control_frame, text="WLAN Interface:").grid(row=0, column=0)
         self.interface = ttk.Combobox(control_frame, values=self.get_interfaces())
         self.interface.grid(row=0, column=1, padx=5)
         
-        # Start/Stop Buttons
         self.start_btn = ttk.Button(control_frame, text="Überwachung starten", command=self.start_monitoring)
         self.start_btn.grid(row=0, column=2, padx=5)
         
@@ -155,16 +141,12 @@ class PoliceGUI:
             self.tree.heading(col, text=col)
             self.tree.column(col, width=120, anchor=tk.CENTER)
         
-        self.tree.column("Zeit", width=80)
-        self.tree.column("Signal", width=100)
-        
         scrollbar = ttk.Scrollbar(attack_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scrollbar.set)
         
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # Statusleiste
         self.status = ttk.Label(main_frame, text="Bereit zur Überwachung", relief=tk.SUNKEN)
         self.status.pack(fill=tk.X, pady=(5,0))
 
@@ -197,21 +179,16 @@ class PoliceGUI:
 
     def add_attack(self, data):
         self.tree.insert("", 0, values=data)
-        
-        # Signalstärke visualisieren
         rssi = int(data[3].split()[0])
         self.update_signal_meter(rssi)
         
-        # Alte Einträge löschen
         if len(self.tree.get_children()) > MAX_ATTACKS:
             self.tree.delete(self.tree.get_children()[-1])
 
     def update_signal_meter(self, rssi):
-        # RSSI zu Prozent umrechnen (-30dBm = exzellent, -90dBm = schlecht)
-        percent = max(0, min(100, int((rssi + 90) * 1.67))
+        percent = max(0, min(100, int((rssi + 90) * 1.67)))
         self.signal_meter["value"] = percent
         
-        # Farbe basierend auf Signalstärke
         if rssi > -60:
             color = "green"
             strength = "Stark"
@@ -230,10 +207,9 @@ class PoliceGUI:
     def update_gui(self):
         self.root.after(500, self.update_gui)
 
-# ================= HAUPTPROGRAMM =================
 if __name__ == "__main__":
     if os.geteuid() != 0:
-        print("Bitte als Administrator ausführen: sudo python3 police_deauth_pro.py")
+        print("Bitte als Administrator ausführen: sudo python3 deauth_pro.py")
         sys.exit(1)
         
     root = tk.Tk()
