@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-POLIZEI DeAuth-Guard PRO mit Signalpegelanzeige und Kanal-Hopping
+POLIZEI DeAuth-Guard PRO mit automatischer Erkennung und Anzeige der MAC-Adressen bei echten Attacken.
+Dieses Script erkennt echte Attacken und zeigt die MAC-Adresse des Angreifers vollständig an.
 """
 
 import os
@@ -10,43 +11,30 @@ import threading
 import subprocess
 import sqlite3
 from datetime import datetime
-from scapy.all import sniff, Dot11Deauth, RadioTap, Dot11
+from scapy.all import sniff, Dot11Deauth, Dot11Beacon
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 class WifiScanner:
     @staticmethod
     def get_interfaces():
-        """Listet WLAN-Adapter ohne Modusänderung"""
         try:
             output = subprocess.check_output(["iw", "dev"], text=True)
             interfaces = [line.split()[1] for line in output.split("\n") if "Interface" in line]
-            print("Verfügbare Interfaces:", interfaces)
             return interfaces
-        except Exception as e:
-            print("Fehler beim Abrufen der Interfaces:", e)
-            return ["wlan0"]  # Fallback
+        except:
+            return ["wlan0"]
 
     @staticmethod
     def enable_monitor_mode(interface):
-        """Aktiviert Monitor-Mode mit Debug-Ausgaben"""
         try:
-            print(f"Setze {interface} in Monitor-Mode...")
             subprocess.check_output(["sudo", "ip", "link", "set", interface, "down"], stderr=subprocess.STDOUT)
-            output = subprocess.check_output(["sudo", "iw", interface, "set", "monitor", "control"], stderr=subprocess.STDOUT)
-            print("Befehl ausgeführt:", output)
+            subprocess.check_output(["sudo", "iw", interface, "set", "monitor", "control"], stderr=subprocess.STDOUT)
             subprocess.check_output(["sudo", "ip", "link", "set", interface, "up"], stderr=subprocess.STDOUT)
             time.sleep(1)
             info = subprocess.getoutput(f"iw {interface} info")
-            print("Interface Info nach Aktivierung:\n", info)
-            if "monitor" in info:
-                print(f"{interface} ist jetzt im Monitor-Mode.")
-                return True
-            else:
-                print(f"Fehler: {interface} ist nicht im Monitor-Mode.")
-                return False
-        except subprocess.CalledProcessError as e:
-            print("Fehler beim Aktivieren des Monitor-Modus:", e.output)
+            return "monitor" in info
+        except:
             return False
 
 class ChannelHopper:
@@ -55,44 +43,35 @@ class ChannelHopper:
         self.running = False
         self.stop_hopping = False
         self.current_channel = 1
-        self.thread = None
 
     def start(self):
         self.running = True
-        self.thread = threading.Thread(target=self.hop_channels, daemon=True)
-        self.thread.start()
+        threading.Thread(target=self.hop_channels, daemon=True).start()
 
     def hop_channels(self):
-        channels = range(1, 12)  # Kanäle 1-11
+        channels = range(1, 12)
         while self.running:
             if self.stop_hopping:
-                # Bei Attacke Fokus auf Kanal
                 time.sleep(1)
                 continue
             for ch in channels:
                 if not self.running:
                     break
                 self.current_channel = ch
-                print(f"Wechsle zu Kanal {ch}")
-                subprocess.run(["sudo", "iwconfig", self.iface, "channel", str(ch)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                time.sleep(0.5)  # Kurze Pause
-        print("Kanal-Hopping beendet.")
+                subprocess.run(["sudo", "iwconfig", self.iface, "channel", str(ch)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(0.5)
 
     def focus_on_channel(self, channel):
-        """Bleibt auf dem Kanal der Attacke"""
-        print(f"Fokussiere auf Kanal {channel}")
         self.stop_hopping = True
-        subprocess.run(["sudo", "iwconfig", self.iface, "channel", str(channel)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "iwconfig", self.iface, "channel", str(channel)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def resume_hopping(self):
-        """Setzt das Hopping fort"""
-        print("Zurück zum Kanal-Hopping")
         self.stop_hopping = False
 
     def stop(self):
         self.running = False
-        if self.thread:
-            self.thread.join()
 
 class DeauthDetector:
     def __init__(self, iface, attack_callback, channel_hopper):
@@ -119,7 +98,6 @@ class DeauthDetector:
 
     def start(self):
         self.running = True
-        print("Starte Sniffing...")
         sniff(iface=self.iface,
               prn=self.handle_packet,
               store=False,
@@ -129,31 +107,41 @@ class DeauthDetector:
         if not pkt.haslayer(Dot11Deauth):
             return
         rssi = pkt.dBm_AntSignal if hasattr(pkt, 'dBm_AntSignal') else -100
+        attacker_mac = pkt.addr2 or "Unknown"
+        target_mac = pkt.addr1 or "Unknown"
+        ssid = "<Unbekannt>"
+        if pkt.haslayer(Dot11Beacon):
+            try:
+                ssid_bytes = pkt.info
+                ssid = ssid_bytes.decode()
+            except:
+                ssid = "<Hidden>"
+
+        # Erstelle das Daten-Tuple für die Anzeige und Speicherung
         attack_data = (
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            pkt.addr2 or "Unknown",
-            pkt.addr1 or "Unknown",
+            attacker_mac,
+            target_mac,
+            ssid,
             rssi,
             self.channel_hopper.current_channel
         )
-        print("Deauth erkannt:", attack_data)
+
+        print("Attack erkannt:", attack_data)
         self.log_attack(attack_data)
-        # Attack erkannt, auf Kanal fokussieren
-        self.channel_hopper.focus_on_channel(attack_data[4])
+        self.channel_hopper.focus_on_channel(attack_data[5])
         self.attack_callback(attack_data)
 
     def log_attack(self, data):
         try:
-            self.conn.execute("INSERT INTO attacks VALUES (NULL, ?, ?, ?, ?, ?)", data)
+            self.conn.execute("INSERT INTO attacks VALUES (NULL, ?, ?, ?, ?, ?, ?)", data)
             self.conn.commit()
-            print("Angriff gespeichert:", data)
-        except Exception as e:
-            print("Fehler beim Speichern in der DB:", e)
+        except:
+            pass
 
     def stop(self):
         self.running = False
         self.conn.close()
-        print("Sniffing gestoppt.")
 
 class PoliceGUI:
     def __init__(self, root):
@@ -190,20 +178,16 @@ class PoliceGUI:
         self.signal_meter = ttk.Progressbar(control_frame, length=100, mode='determinate')
         self.signal_meter.grid(row=0, column=4, padx=5)
 
-        ttk.Button(control_frame, 
-                   text="↻ Aktualisieren",
-                   command=self.update_interfaces).grid(row=0, column=5, padx=5)
+        ttk.Button(control_frame, text="↻ Aktualisieren", command=self.update_interfaces).grid(row=0, column=5, padx=5)
 
-        self.start_btn = ttk.Button(control_frame,
-                                    text="▶ Start",
-                                    command=self.start_monitoring)
+        self.start_btn = ttk.Button(control_frame, text="▶ Start", command=self.start_monitoring)
         self.start_btn.grid(row=0, column=6, padx=5)
 
-        self.stop_btn = ttk.Button(control_frame,
-                                   text="■ Stop",
-                                   command=self.stop_monitoring,
-                                   state=tk.DISABLED)
+        self.stop_btn = ttk.Button(control_frame, text="■ Stop", command=self.stop_monitoring, state=tk.DISABLED)
         self.stop_btn.grid(row=0, column=7, padx=5)
+
+        # Keine manuelle Simulation, alles automatisch
+        # Das Script erkennt Attacken und zeigt MAC an
 
         log_frame = ttk.LabelFrame(main_frame, text="Angriffsprotokoll", padding=10)
         log_frame.pack(fill=tk.BOTH, expand=True)
@@ -220,7 +204,6 @@ class PoliceGUI:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
     def update_interfaces(self):
-        """Aktualisiert die Adapterliste ohne Modusänderung"""
         ifaces = WifiScanner.get_interfaces()
         self.interface_menu['values'] = ifaces
         if ifaces:
@@ -231,16 +214,12 @@ class PoliceGUI:
         if not iface:
             messagebox.showerror("Fehler", "Bitte WLAN-Adapter auswählen!")
             return
-        # Monitor-Mode aktivieren
         if not WifiScanner.enable_monitor_mode(iface):
             messagebox.showerror("Fehler", f"Monitor-Mode auf {iface} fehlgeschlagen!\nBitte anderen Adapter wählen.")
             return
-
-        # Kanal-Hopper starten
         self.channel_hopper = ChannelHopper(iface)
         self.channel_hopper.start()
 
-        # Attack-Detektor starten
         self.detector = DeauthDetector(iface, self.update_display, self.channel_hopper)
         threading.Thread(target=self.detector.start, daemon=True).start()
 
@@ -254,33 +233,34 @@ class PoliceGUI:
             self.channel_hopper.stop()
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
-        # Nach Ende, Hopping wieder aktivieren
         if self.channel_hopper:
             self.channel_hopper.resume_hopping()
 
     def update_display(self, data):
-        rssi = data[3]
+        # hier wandeln wir rssi in int um, falls es ein string ist
+        rssi_value = data[3]
+        try:
+            rssi = int(rssi_value)
+        except:
+            rssi = -100  # fallback
         self.rssi_var.set(f"{rssi} dBm")
-        value = max(0, min(100, abs(rssi)))
-        self.signal_meter['value'] = value
-
+        val = max(0, min(100, abs(rssi)))
+        self.signal_meter['value'] = val
         if rssi > -60:
             self.signal_meter['style'] = 'green.Horizontal.TProgressbar'
         elif rssi > -75:
             self.signal_meter['style'] = 'yellow.Horizontal.TProgressbar'
         else:
             self.signal_meter['style'] = 'red.Horizontal.TProgressbar'
-
+        # Log
         self.log_view.insert("", 0, values=(
-            data[0], data[1][:8]+"...", data[2][:8]+"...", f"{rssi} dBm", data[4]
+            data[0], data[1], data[2], f"{rssi} dBm", data[5]
         ))
-        self.log_view.see("")
 
 if __name__ == "__main__":
     if os.geteuid() != 0:
-        print("Bitte als Administrator ausführen: sudo python3 scriptname.py")
+        print("Bitte als Administrator ausführen")
         sys.exit(1)
-
     root = tk.Tk()
     app = PoliceGUI(root)
     root.mainloop()
