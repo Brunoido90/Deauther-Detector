@@ -18,11 +18,11 @@ import logging
 
 # Scapy + TKinter
 try:
-    from scapy.all import sniff, Dot11Deauth, Dot11Disassoc, RadioTap
+    from scapy.all import sniff, Dot11Deauth, Dot11Disas, RadioTap
     from scapy.layers.dot11 import Dot11
 except ImportError:
     subprocess.run(["pip3", "install", "scapy"], capture_output=True)
-    from scapy.all import sniff, Dot11Deauth, Dot11Disassoc, RadioTap
+    from scapy.all import sniff, Dot11Deauth, Dot11Disas, RadioTap
     from scapy.layers.dot11 import Dot11
 
 import tkinter as tk
@@ -311,7 +311,7 @@ class BrunoidoGUI:
 
     def on_deauth(self, pkt):
         """Process deauth and disassoc packets"""
-        if pkt.haslayer(Dot11Deauth) or pkt.haslayer(Dot11Disassoc):
+        if pkt.haslayer(Dot11Deauth) or pkt.haslayer(Dot11Disas):
             rssi = pkt[RadioTap].dBm_AntSignal if pkt.haslayer(RadioTap) else -999
             hacker_mac = pkt.addr2 or "unknown"
             target_mac = pkt.addr1 or "broadcast"
@@ -365,7 +365,7 @@ class DeauthSniffer:
 
     def start(self):
         def packet_handler(pkt):
-            if not self.running or not (pkt.haslayer(Dot11Deauth) or pkt.haslayer(Dot11Disassoc)):
+            if not self.running or not (pkt.haslayer(Dot11Deauth) or pkt.haslayer(Dot11Disas)):
                 return
             self.callback(pkt)
 
