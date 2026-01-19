@@ -308,6 +308,9 @@ class BrunoidoGUI:
 
             # Update GUI (thread-safe)
             self.root.after(0, lambda: self.update_display(hacker_mac, target_mac, rssi, direction))
+
+            # Show alert
+            messagebox.showwarning("Deauth Attack", f"Deauth attack detected from {hacker_mac} to {target_mac}")
         else:
             logging.warning("Packet does not contain a deauth layer")
 
