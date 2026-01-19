@@ -217,6 +217,11 @@ class BrunoidoGUI:
         tk.Button(ctrl_frame, text="🔧 Fix Network", command=NetworkFixer.fix_network,
                  bg="#ffaa00", fg="black").grid(row=2, column=0, columnspan=2, pady=5)
 
+        # Start Button
+        self.start_button = tk.Button(ctrl_frame, text="Start Tracking", command=self.start_tracking_manual,
+                                     bg="#00ff88", fg="black")
+        self.start_button.grid(row=3, column=0, columnspan=2, pady=5)
+
         # Stats
         stats_frame = tk.LabelFrame(left_frame, text="📊 Hacker Stats", fg="#00ff88", bg="black",
                                    font=("Arial", 14, "bold"), padx=15, pady=15)
@@ -293,11 +298,16 @@ class BrunoidoGUI:
         if ifaces:
             self.iface_var.set(ifaces[0])
             messagebox.showinfo("WiFi Interface", f"Detected WiFi interface: {ifaces[0]}")
-            self.start_tracking(ifaces[0])
+            # Do not start tracking automatically
         else:
             messagebox.showwarning("WiFi Interface", "No WiFi interface detected. Please select manually.")
 
-    def start_tracking(self, iface):
+    def start_tracking_manual(self):
+        iface = self.iface_var.get()
+        if not iface:
+            messagebox.showwarning("WiFi Interface", "No WiFi interface selected. Please select manually.")
+            return
+
         logging.info(f"Starting tracking on interface: {iface}")
         NetworkFixer.fix_network()
         self.monitor_iface = iface
@@ -307,10 +317,12 @@ class BrunoidoGUI:
 
         self.monitoring = True
         self.status_label.config(text="Status: Tracking", fg="green")
+        self.start_button.config(state=tk.DISABLED)
 
     def stop_tracking(self):
         self.monitoring = False
         self.status_label.config(text="Status: Not Tracking", fg="red")
+        self.start_button.config(state=tk.NORMAL)
 
     def on_deauth(self, pkt):
         """Process deauth and disassoc packets"""
