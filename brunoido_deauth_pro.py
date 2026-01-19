@@ -139,9 +139,10 @@ class CompassWidget(Canvas):
         self.create_oval(20, 20, 280, 280, outline="#00ff88", width=3)
 
         # Direction labels
-        directions = ["N", "E", "S", "W"]
+        directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        angles = [0, 45, 90, 135, 180, 225, 270, 315]
         for i, d in enumerate(directions):
-            angle = i * 90
+            angle = angles[i]
             x = cx + 110 * math.cos(math.radians(angle))
             y = cy + 110 * math.sin(math.radians(angle))
             self.create_text(x, y, text=d, fill="#00ff88", font=("Arial", 16, "bold"))
@@ -172,7 +173,7 @@ class BrunoidoGUI:
         self.root = root
         self.root.title("🛡️ Brunoido v5.0 - Hacker Tracker")
         self.root.geometry("1400x900")
-        self.root.configure(bg="black")
+        self.root.configure(bg="#1e1e1e")
 
         self.tracker = HackerTracker()
         self.sniffer = None
@@ -184,24 +185,24 @@ class BrunoidoGUI:
     def make_dashboard(self):
         # Title
         title = tk.Label(self.root, text="🛡️ BRUNOIDO HACKER COMPASS v5.0",
-                        font=("Arial", 24, "bold"), fg="#00ff88", bg="black")
+                        font=("Arial", 24, "bold"), fg="#00ff88", bg="#1e1e1e")
         title.pack(pady=10)
 
         # Main frame
-        main = tk.Frame(self.root, bg="black")
+        main = tk.Frame(self.root, bg="#1e1e1e")
         main.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
 
         # Left: Controls + Stats
-        left_frame = tk.Frame(main, bg="black", width=400)
+        left_frame = tk.Frame(main, bg="#1e1e1e", width=400)
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0,20))
         left_frame.pack_propagate(False)
 
         # Controls
-        ctrl_frame = tk.LabelFrame(left_frame, text="🎯 Control", fg="#00ff88", bg="black",
+        ctrl_frame = tk.LabelFrame(left_frame, text="🎯 Control", fg="#00ff88", bg="#1e1e1e",
                                   font=("Arial", 14, "bold"), padx=15, pady=15)
         ctrl_frame.pack(fill=tk.X, pady=(0,20))
 
-        tk.Label(ctrl_frame, text="WiFi Interface:", fg="white", bg="black").grid(row=0, column=0, sticky="w")
+        tk.Label(ctrl_frame, text="WiFi Interface:", fg="white", bg="#1e1e1e").grid(row=0, column=0, sticky="w")
         self.iface_var = tk.StringVar(value="auto")
         iface_combo = ttk.Combobox(ctrl_frame, textvariable=self.iface_var, width=20)
         iface_combo.grid(row=0, column=1, padx=10, pady=5)
@@ -221,28 +222,28 @@ class BrunoidoGUI:
                  bg="#ffaa00", fg="black").grid(row=4, column=0, columnspan=2, pady=5)
 
         # Stats
-        stats_frame = tk.LabelFrame(left_frame, text="📊 Hacker Stats", fg="#00ff88", bg="black",
+        stats_frame = tk.LabelFrame(left_frame, text="📊 Hacker Stats", fg="#00ff88", bg="#1e1e1e",
                                    font=("Arial", 14, "bold"), padx=15, pady=15)
         stats_frame.pack(fill=tk.X, pady=(0,20))
 
-        self.hacker_label = tk.Label(stats_frame, text="TOP HACKER: None", fg="red", bg="black",
+        self.hacker_label = tk.Label(stats_frame, text="TOP HACKER: None", fg="red", bg="#1e1e1e",
                                     font=("Arial", 16, "bold"))
         self.hacker_label.pack(pady=10)
 
-        self.attack_count = tk.Label(stats_frame, text="Total Attacks: 0", fg="white", bg="black")
+        self.attack_count = tk.Label(stats_frame, text="Total Attacks: 0", fg="white", bg="#1e1e1e")
         self.attack_count.pack()
 
-        self.rssi_label = tk.Label(stats_frame, text="RSSI: -999 dBm", fg="white", bg="black")
+        self.rssi_label = tk.Label(stats_frame, text="RSSI: -999 dBm", fg="white", bg="#1e1e1e")
         self.rssi_label.pack()
 
         # COMPASS
-        compass_frame = tk.LabelFrame(left_frame, text="🧭 HACKER COMPASS", fg="#00ff88", bg="black",
+        compass_frame = tk.LabelFrame(left_frame, text="🧭 HACKER COMPASS", fg="#00ff88", bg="#1e1e1e",
                                      font=("Arial", 14, "bold"), padx=10, pady=10)
         compass_frame.pack(fill=tk.X)
         self.compass = CompassWidget(compass_frame, self.tracker)
 
         # Right: Attack Log
-        log_frame = tk.LabelFrame(main, text="🚨 LIVE ATTACKS", fg="#ff4444", bg="black",
+        log_frame = tk.LabelFrame(main, text="🚨 LIVE ATTACKS", fg="#ff4444", bg="#1e1e1e",
                                  font=("Arial", 16, "bold"), padx=15, pady=15)
         log_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
@@ -297,15 +298,18 @@ class BrunoidoGUI:
 
     def on_deauth(self, pkt):
         """Process deauth packet"""
-        rssi = pkt[RadioTap].dBm_AntSignal if pkt.haslayer(RadioTap) else -999
-        hacker_mac = pkt.addr2 or "unknown"
-        target_mac = pkt.addr1 or "broadcast"
+        if pkt.haslayer(Dot11Deauth):
+            rssi = pkt[RadioTap].dBm_AntSignal if pkt.haslayer(RadioTap) else -999
+            hacker_mac = pkt.addr2 or "unknown"
+            target_mac = pkt.addr1 or "broadcast"
 
-        # Track hacker
-        direction = self.tracker.track(hacker_mac, rssi, 6)
+            # Track hacker
+            direction = self.tracker.track(hacker_mac, rssi, 6)
 
-        # Update GUI (thread-safe)
-        self.root.after(0, lambda: self.update_display(hacker_mac, target_mac, rssi, direction))
+            # Update GUI (thread-safe)
+            self.root.after(0, lambda: self.update_display(hacker_mac, target_mac, rssi, direction))
+        else:
+            logging.warning("Packet does not contain a deauth layer")
 
     def update_display(self, hacker_mac, target_mac, rssi, direction):
         """Update GUI with attack data"""
