@@ -209,16 +209,12 @@ class BrunoidoGUI:
         self.iface_entry = tk.Entry(ctrl_frame, textvariable=self.iface_var, width=20, state="readonly")
         self.iface_entry.grid(row=0, column=1, padx=10, pady=5)
 
-        self.start_btn = tk.Button(ctrl_frame, text="🚀 START TRACKING", command=self.start_tracking,
-                                  bg="red", fg="white", font=("Arial", 14, "bold"), width=20)
-        self.start_btn.grid(row=1, column=0, columnspan=2, pady=10)
-
-        self.stop_btn = tk.Button(ctrl_frame, text="⏹ STOP", command=self.stop_tracking,
-                                 bg="#666", fg="white", state="disabled", width=20)
-        self.stop_btn.grid(row=2, column=0, columnspan=2, pady=5)
+        self.status_label = tk.Label(ctrl_frame, text="Status: Not Started", fg="red", bg="black",
+                                    font=("Arial", 14, "bold"))
+        self.status_label.grid(row=1, column=0, columnspan=2, pady=10)
 
         tk.Button(ctrl_frame, text="🔧 Fix Network", command=NetworkFixer.fix_network,
-                 bg="#ffaa00", fg="black").grid(row=3, column=0, columnspan=2, pady=5)
+                 bg="#ffaa00", fg="black").grid(row=2, column=0, columnspan=2, pady=5)
 
         # Stats
         stats_frame = tk.LabelFrame(left_frame, text="📊 Hacker Stats", fg="#00ff88", bg="black",
@@ -263,18 +259,31 @@ class BrunoidoGUI:
         # Refresh stats
         self.refresh_stats()
 
-        # Auto-detect WiFi interface
+        # Auto-detect WiFi interface and start tracking
         self.auto_detect()
 
     def auto_detect(self):
-        """Auto-detect WiFi interfaces"""
+        """Auto-detect WiFi interfaces and start tracking"""
         ifaces = []
         try:
-            result = subprocess.run(["iw", "dev"], capture_output=True, text=True)
-            for line in result.stdout.splitlines():
-                if "Interface" in line and ("wlan" in line or "wlp" in line):
-                    iface = line.split()[1]
-                    ifaces.append(iface)
+            if sys.platform.startswith('win'):
+                result = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True)
+                for line in result.stdout.splitlines():
+                    if "State" in line and "connected" in line.lower():
+                        iface = line.split(":")[1].strip()
+                        ifaces.append(iface)
+            elif sys.platform.startswith('darwin'):
+                result = subprocess.run(["networksetup", "-listallhardwareports"], capture_output=True, text=True)
+                for line in result.stdout.splitlines():
+                    if "Wi-Fi" in line:
+                        iface = line.split(":")[1].strip()
+                        ifaces.append(iface)
+            else:
+                result = subprocess.run(["iw", "dev"], capture_output=True, text=True)
+                for line in result.stdout.splitlines():
+                    if "Interface" in line and ("wlan" in line or "wlp" in line):
+                        iface = line.split()[1]
+                        ifaces.append(iface)
         except Exception as e:
             logging.warning(f"Error detecting interfaces: {e}")
             ifaces = ["wlan0", "wlan1"]
@@ -282,15 +291,11 @@ class BrunoidoGUI:
         if ifaces:
             self.iface_var.set(ifaces[0])
             messagebox.showinfo("WiFi Interface", f"Detected WiFi interface: {ifaces[0]}")
+            self.start_tracking(ifaces[0])
         else:
             messagebox.showwarning("WiFi Interface", "No WiFi interface detected. Please select manually.")
 
-    def start_tracking(self):
-        iface = self.iface_var.get()
-        if not iface:
-            messagebox.showwarning("WiFi Interface", "Please select a WiFi interface.")
-            return
-
+    def start_tracking(self, iface):
         NetworkFixer.fix_network()
         self.monitor_iface = iface
 
@@ -298,13 +303,11 @@ class BrunoidoGUI:
         self.sniffer.start()
 
         self.monitoring = True
-        self.start_btn.config(state="disabled")
-        self.stop_btn.config(state="normal")
+        self.status_label.config(text="Status: Tracking", fg="green")
 
     def stop_tracking(self):
         self.monitoring = False
-        self.start_btn.config(state="normal")
-        self.stop_btn.config(state="disabled")
+        self.status_label.config(text="Status: Not Tracking", fg="red")
 
     def on_deauth(self, pkt):
         """Process deauth packet"""
