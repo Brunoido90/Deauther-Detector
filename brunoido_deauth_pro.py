@@ -202,24 +202,23 @@ class BrunoidoGUI:
                                   font=("Arial", 14, "bold"), padx=15, pady=15)
         ctrl_frame.pack(fill=tk.X, pady=(0,20))
 
-        tk.Label(ctrl_frame, text="WiFi Interface:", fg="white", bg="black").grid(row=0, column=0, sticky="w")
-        self.iface_var = tk.StringVar(value="auto")
-        iface_combo = ttk.Combobox(ctrl_frame, textvariable=self.iface_var, width=20)
-        iface_combo.grid(row=0, column=1, padx=10, pady=5)
+        self.iface_var = tk.StringVar()
+        self.iface_label = tk.Label(ctrl_frame, text="WiFi Interface: ", fg="white", bg="black")
+        self.iface_label.grid(row=0, column=0, sticky="w")
 
-        tk.Button(ctrl_frame, text="🔍 Auto-Detect", command=self.auto_detect,
-                 bg="#00ff88", fg="black", font=("Arial", 12, "bold")).grid(row=1, column=0, columnspan=2, pady=10)
+        self.iface_entry = tk.Entry(ctrl_frame, textvariable=self.iface_var, width=20, state="readonly")
+        self.iface_entry.grid(row=0, column=1, padx=10, pady=5)
 
         self.start_btn = tk.Button(ctrl_frame, text="🚀 START TRACKING", command=self.start_tracking,
                                   bg="red", fg="white", font=("Arial", 14, "bold"), width=20)
-        self.start_btn.grid(row=2, column=0, columnspan=2, pady=10)
+        self.start_btn.grid(row=1, column=0, columnspan=2, pady=10)
 
         self.stop_btn = tk.Button(ctrl_frame, text="⏹ STOP", command=self.stop_tracking,
                                  bg="#666", fg="white", state="disabled", width=20)
-        self.stop_btn.grid(row=3, column=0, columnspan=2, pady=5)
+        self.stop_btn.grid(row=2, column=0, columnspan=2, pady=5)
 
         tk.Button(ctrl_frame, text="🔧 Fix Network", command=NetworkFixer.fix_network,
-                 bg="#ffaa00", fg="black").grid(row=4, column=0, columnspan=2, pady=5)
+                 bg="#ffaa00", fg="black").grid(row=3, column=0, columnspan=2, pady=5)
 
         # Stats
         stats_frame = tk.LabelFrame(left_frame, text="📊 Hacker Stats", fg="#00ff88", bg="black",
@@ -264,6 +263,9 @@ class BrunoidoGUI:
         # Refresh stats
         self.refresh_stats()
 
+        # Auto-detect WiFi interface
+        self.auto_detect()
+
     def auto_detect(self):
         """Auto-detect WiFi interfaces"""
         ifaces = []
@@ -285,7 +287,7 @@ class BrunoidoGUI:
 
     def start_tracking(self):
         iface = self.iface_var.get()
-        if iface == "auto":
+        if not iface:
             messagebox.showwarning("WiFi Interface", "Please select a WiFi interface.")
             return
 
