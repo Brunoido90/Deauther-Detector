@@ -18,11 +18,11 @@ import logging
 
 # Scapy + TKinter
 try:
-    from scapy.all import sniff, Dot11Deauth, RadioTap
+    from scapy.all import sniff, Dot11Deauth, Dot11Disassoc, RadioTap
     from scapy.layers.dot11 import Dot11
 except ImportError:
     subprocess.run(["pip3", "install", "scapy"], capture_output=True)
-    from scapy.all import sniff, Dot11Deauth, RadioTap
+    from scapy.all import sniff, Dot11Deauth, Dot11Disassoc, RadioTap
     from scapy.layers.dot11 import Dot11
 
 import tkinter as tk
@@ -310,8 +310,8 @@ class BrunoidoGUI:
         self.status_label.config(text="Status: Not Tracking", fg="red")
 
     def on_deauth(self, pkt):
-        """Process deauth packet"""
-        if pkt.haslayer(Dot11Deauth):
+        """Process deauth and disassoc packets"""
+        if pkt.haslayer(Dot11Deauth) or pkt.haslayer(Dot11Disassoc):
             rssi = pkt[RadioTap].dBm_AntSignal if pkt.haslayer(RadioTap) else -999
             hacker_mac = pkt.addr2 or "unknown"
             target_mac = pkt.addr1 or "broadcast"
@@ -323,9 +323,9 @@ class BrunoidoGUI:
             self.root.after(0, lambda: self.update_display(hacker_mac, target_mac, rssi, direction))
 
             # Show alert
-            messagebox.showwarning("Deauth Attack", f"Deauth attack detected from {hacker_mac} to {target_mac}")
+            messagebox.showwarning("Deauth/Disassoc Attack", f"Deauth/Disassoc attack detected from {hacker_mac} to {target_mac}")
         else:
-            logging.warning("Packet does not contain a deauth layer")
+            logging.warning("Packet does not contain a deauth or disassoc layer")
 
     def update_display(self, hacker_mac, target_mac, rssi, direction):
         """Update GUI with attack data"""
@@ -365,7 +365,7 @@ class DeauthSniffer:
 
     def start(self):
         def packet_handler(pkt):
-            if not self.running or not pkt.haslayer(Dot11Deauth):
+            if not self.running or not (pkt.haslayer(Dot11Deauth) or pkt.haslayer(Dot11Disassoc)):
                 return
             self.callback(pkt)
 
