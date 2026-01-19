@@ -50,7 +50,8 @@ class NetworkFixer:
         ]
         for cmd in cmds:
             try:
-                subprocess.run(["sudo"] + cmd, capture_output=True, check=True)
+                result = subprocess.run(["sudo"] + cmd, capture_output=True, check=True, text=True)
+                logging.info(f"Command succeeded: {' '.join(cmd)}. Output: {result.stdout}")
             except subprocess.CalledProcessError as e:
                 logging.warning(f"Command failed: {' '.join(cmd)}. Error: {e}")
         logging.info("✅ Network fixed!")
@@ -284,6 +285,7 @@ class BrunoidoGUI:
                     if "Interface" in line and ("wlan" in line or "wlp" in line):
                         iface = line.split()[1]
                         ifaces.append(iface)
+                        logging.info(f"Detected WiFi interface: {iface}")
         except Exception as e:
             logging.warning(f"Error detecting interfaces: {e}")
             ifaces = ["wlan0", "wlan1"]
@@ -296,6 +298,7 @@ class BrunoidoGUI:
             messagebox.showwarning("WiFi Interface", "No WiFi interface detected. Please select manually.")
 
     def start_tracking(self, iface):
+        logging.info(f"Starting tracking on interface: {iface}")
         NetworkFixer.fix_network()
         self.monitor_iface = iface
 
@@ -364,6 +367,7 @@ class DeauthSniffer:
         self.running = True
 
     def start(self):
+        logging.info(f"Starting sniffer on interface: {self.iface}")
         def packet_handler(pkt):
             if not self.running or not (pkt.haslayer(Dot11Deauth) or pkt.haslayer(Dot11Disas)):
                 return
