@@ -173,7 +173,7 @@ class BrunoidoGUI:
         self.root = root
         self.root.title("🛡️ Brunoido v5.0 - Hacker Tracker")
         self.root.geometry("1400x900")
-        self.root.configure(bg="#1e1e1e")
+        self.root.configure(bg="black")
 
         self.tracker = HackerTracker()
         self.sniffer = None
@@ -185,24 +185,24 @@ class BrunoidoGUI:
     def make_dashboard(self):
         # Title
         title = tk.Label(self.root, text="🛡️ BRUNOIDO HACKER COMPASS v5.0",
-                        font=("Arial", 24, "bold"), fg="#00ff88", bg="#1e1e1e")
+                        font=("Arial", 24, "bold"), fg="#00ff88", bg="black")
         title.pack(pady=10)
 
         # Main frame
-        main = tk.Frame(self.root, bg="#1e1e1e")
+        main = tk.Frame(self.root, bg="black")
         main.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
 
         # Left: Controls + Stats
-        left_frame = tk.Frame(main, bg="#1e1e1e", width=400)
+        left_frame = tk.Frame(main, bg="black", width=400)
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0,20))
         left_frame.pack_propagate(False)
 
         # Controls
-        ctrl_frame = tk.LabelFrame(left_frame, text="🎯 Control", fg="#00ff88", bg="#1e1e1e",
+        ctrl_frame = tk.LabelFrame(left_frame, text="🎯 Control", fg="#00ff88", bg="black",
                                   font=("Arial", 14, "bold"), padx=15, pady=15)
         ctrl_frame.pack(fill=tk.X, pady=(0,20))
 
-        tk.Label(ctrl_frame, text="WiFi Interface:", fg="white", bg="#1e1e1e").grid(row=0, column=0, sticky="w")
+        tk.Label(ctrl_frame, text="WiFi Interface:", fg="white", bg="black").grid(row=0, column=0, sticky="w")
         self.iface_var = tk.StringVar(value="auto")
         iface_combo = ttk.Combobox(ctrl_frame, textvariable=self.iface_var, width=20)
         iface_combo.grid(row=0, column=1, padx=10, pady=5)
@@ -222,28 +222,28 @@ class BrunoidoGUI:
                  bg="#ffaa00", fg="black").grid(row=4, column=0, columnspan=2, pady=5)
 
         # Stats
-        stats_frame = tk.LabelFrame(left_frame, text="📊 Hacker Stats", fg="#00ff88", bg="#1e1e1e",
+        stats_frame = tk.LabelFrame(left_frame, text="📊 Hacker Stats", fg="#00ff88", bg="black",
                                    font=("Arial", 14, "bold"), padx=15, pady=15)
         stats_frame.pack(fill=tk.X, pady=(0,20))
 
-        self.hacker_label = tk.Label(stats_frame, text="TOP HACKER: None", fg="red", bg="#1e1e1e",
+        self.hacker_label = tk.Label(stats_frame, text="TOP HACKER: None", fg="red", bg="black",
                                     font=("Arial", 16, "bold"))
         self.hacker_label.pack(pady=10)
 
-        self.attack_count = tk.Label(stats_frame, text="Total Attacks: 0", fg="white", bg="#1e1e1e")
+        self.attack_count = tk.Label(stats_frame, text="Total Attacks: 0", fg="white", bg="black")
         self.attack_count.pack()
 
-        self.rssi_label = tk.Label(stats_frame, text="RSSI: -999 dBm", fg="white", bg="#1e1e1e")
+        self.rssi_label = tk.Label(stats_frame, text="RSSI: -999 dBm", fg="white", bg="black")
         self.rssi_label.pack()
 
         # COMPASS
-        compass_frame = tk.LabelFrame(left_frame, text="🧭 HACKER COMPASS", fg="#00ff88", bg="#1e1e1e",
+        compass_frame = tk.LabelFrame(left_frame, text="🧭 HACKER COMPASS", fg="#00ff88", bg="black",
                                      font=("Arial", 14, "bold"), padx=10, pady=10)
         compass_frame.pack(fill=tk.X)
         self.compass = CompassWidget(compass_frame, self.tracker)
 
         # Right: Attack Log
-        log_frame = tk.LabelFrame(main, text="🚨 LIVE ATTACKS", fg="#ff4444", bg="#1e1e1e",
+        log_frame = tk.LabelFrame(main, text="🚨 LIVE ATTACKS", fg="#ff4444", bg="black",
                                  font=("Arial", 16, "bold"), padx=15, pady=15)
         log_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
