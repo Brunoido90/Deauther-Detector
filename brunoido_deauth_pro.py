@@ -277,10 +277,18 @@ class BrunoidoGUI:
             logging.warning(f"Error detecting interfaces: {e}")
             ifaces = ["wlan0", "wlan1"]
 
-        self.iface_var.set(ifaces[0] if ifaces else "wlan0")
+        if ifaces:
+            self.iface_var.set(ifaces[0])
+            messagebox.showinfo("WiFi Interface", f"Detected WiFi interface: {ifaces[0]}")
+        else:
+            messagebox.showwarning("WiFi Interface", "No WiFi interface detected. Please select manually.")
 
     def start_tracking(self):
         iface = self.iface_var.get()
+        if iface == "auto":
+            messagebox.showwarning("WiFi Interface", "Please select a WiFi interface.")
+            return
+
         NetworkFixer.fix_network()
         self.monitor_iface = iface
 
